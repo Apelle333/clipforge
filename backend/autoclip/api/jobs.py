@@ -13,7 +13,7 @@ from ..db import store
 from ..db.models import Job, new_id
 from ..jobs.events import broker
 from ..jobs.queue import queue
-from .schemas import JobCreateIn, JobOut, JobSettingsIn
+from .schemas import CaptionPatchIn, JobCreateIn, JobOut, JobSettingsIn
 
 log = logging.getLogger(__name__)
 
@@ -147,6 +147,7 @@ async def retry_job(job_id: str) -> JobOut:
             detail=f"Only failed or cancelled jobs can be retried (this one is {job.status}).",
         )
 
+    queue.clear_cancel(job_id)
     await asyncio.to_thread(store.update_job, job_id, status="queued", error=None, progress=0.0)
     queue.notify()
 
@@ -159,3 +160,113 @@ async def job_clips(job_id: str):
     from .clips import list_clips_for_job
 
     return await list_clips_for_job(job_id)
+
+
+@router.get("/{job_id}/transcript")
+async def get_transcript(job_id: str):
+    from dataclasses import asdict
+
+    from ..pipeline.corrections import load_transcript
+
+    try:
+        transcript = await asyncio.to_thread(load_transcript, job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Transcript not found") from exc
+    return {
+        "words": [asdict(w) for w in transcript.words],
+        "language": transcript.language,
+        "metadata": transcript.metadata,
+    }
+
+
+@router.get("/{job_id}/quality-status")
+async def quality_status(job_id: str):
+    import json
+
+    from .. import paths
+
+    path = paths.job_work_dir(job_id) / "highlight-status.json"
+    if not path.exists():
+        return {
+            "status": "legacy-unverified",
+            "failures": [],
+            "note": "Legacy scores have not been validated with the required rubric.",
+        }
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("responses", None)
+    from ..pipeline.corrections import load_transcript
+
+    transcript = await asyncio.to_thread(load_transcript, job_id)
+    from ..pipeline.readability import transcript_revision
+
+    if data.get("transcript_revision") and data["transcript_revision"] != transcript_revision(
+        transcript.words
+    ):
+        data["status"] = "stale — transcript changed; re-score before trusting titles and ranking"
+    data["language"] = transcript.language
+    data["alignment"] = transcript.metadata.get("alignment", "legacy-whisper")
+    data["alignment_warning"] = transcript.metadata.get("alignment_warning")
+    return data
+
+
+@router.get("/{job_id}/selection")
+async def selection_comparison(job_id: str):
+    import json
+
+    from .. import paths
+
+    if await asyncio.to_thread(store.get_job, job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    path = paths.job_work_dir(job_id) / "selection.json"
+    return (
+        json.loads(path.read_text(encoding="utf-8"))
+        if path.exists()
+        else {
+            "note": "Legacy job: candidate comparison was not recorded. Re-score to compare.",
+            "selected": [],
+            "alternatives": [],
+        }
+    )
+
+
+@router.patch("/{job_id}/transcript")
+async def patch_transcript(job_id: str, payload: CaptionPatchIn):
+    from ..pipeline.corrections import save_corrections
+
+    if payload.words is None:
+        raise HTTPException(status_code=422, detail="Words are required")
+    try:
+        await asyncio.to_thread(save_corrections, job_id, [w.model_dump() for w in payload.words])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await get_transcript(job_id)
+
+
+@router.post("/{job_id}/reanalyze", response_model=JobOut, status_code=201)
+async def reanalyze(job_id: str):
+    from ..db.models import Transcript as TranscriptRow
+    from ..pipeline.corrections import load_transcript
+    from ..pipeline.runner import JobWorkspace
+
+    original = await asyncio.to_thread(store.get_job, job_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    transcript = await asyncio.to_thread(load_transcript, job_id)
+    settings = load_settings()
+    job = Job(
+        id=new_id(), source_id=original.source_id, provider="ollama", settings=settings.model_dump()
+    )
+    await asyncio.to_thread(store.create_job, job)
+    destination = JobWorkspace(job.id).transcript
+    transcript.save(destination)
+    store.upsert_transcript(
+        TranscriptRow(
+            job_id=job.id,
+            json_path=str(destination),
+            language=transcript.language,
+            model=transcript.model,
+            word_count=len(transcript.words),
+        )
+    )
+    queue.notify()
+    return JobOut.of(job)

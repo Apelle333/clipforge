@@ -162,9 +162,15 @@ def probe(path: Path) -> MediaInfo:
         "json",
         "-show_format",
         "-show_streams",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-format_whitelist",
+        "mov,matroska,webm,avi,wav,mp3,aac,flac,ogg",
         str(path),
     ]
-    proc = subprocess.run(command, capture_output=True, text=True, check=False, encoding="utf-8")
+    proc = subprocess.run(
+        command, capture_output=True, text=True, check=False, encoding="utf-8", timeout=60
+    )
     if proc.returncode != 0:
         raise FFmpegError(f"Could not read {path.name}.", command=command, stderr=proc.stderr or "")
 

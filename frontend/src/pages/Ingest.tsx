@@ -18,6 +18,7 @@ export function Ingest() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [providers, setProviders] = useState<ProviderStatus[]>([])
+  const [prerequisites, setPrerequisites] = useState<{ whisper_ready: boolean; ollama_ready: boolean; face_ready: boolean; ollama_detail: string } | null>(null)
   const [overrides, setOverrides] = useState<JobSettingsOverrides>({})
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -26,6 +27,7 @@ export function Ingest() {
   useEffect(() => {
     api.listJobs(8).then(setJobs).catch(() => undefined)
     api.providerStatus().then(setProviders).catch(() => undefined)
+    fetch('/api/prerequisites').then((response) => response.json()).then(setPrerequisites).catch(() => undefined)
   }, [])
 
   const start = useCallback(
@@ -62,11 +64,17 @@ export function Ingest() {
       <div className="rise max-w-3xl">
         <p className="eyebrow">Local · No accounts · No watermarks</p>
         <h1 className="mt-5 font-display text-[clamp(2.75rem,7vw,5.5rem)] leading-[0.95] text-ink-100">
-          Long video in.
-          <br />
-          <span className="italic text-sodium-500">Shorts</span> out.
+          New clipping job<span className="text-sodium-500">.</span>
         </h1>
       </div>
+
+      {prerequisites && (
+        <p className="mt-6 text-sm text-ink-300" role="status">
+          Whisper: {prerequisites.whisper_ready ? 'installed' : 'download required on first use'}
+          {' · '}Ollama: {prerequisites.ollama_ready ? prerequisites.ollama_detail : `not ready — ${prerequisites.ollama_detail}`}
+          {' · '}Face tracking: {prerequisites.face_ready ? 'model installed' : 'model download required; centre fallback available'}
+        </p>
+      )}
 
       <div className="mt-16 grid gap-x-16 gap-y-12 lg:grid-cols-[1.35fr_1fr]">
         {/* URL */}
@@ -244,7 +252,7 @@ function AdvancedOptions({
             <NumberField
               label="Max clips"
               value={overrides.max_clips}
-              placeholder="10"
+              placeholder="5"
               min={1}
               max={50}
               onChange={(v) => set('max_clips', v)}

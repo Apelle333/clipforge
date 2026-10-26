@@ -78,6 +78,20 @@ class JobQueue:
     def _requeue_interrupted(self) -> None:
         interrupted = store.list_jobs(limit=100, status="running")
         for job in interrupted:
+            from filelock import FileLock, Timeout
+
+            from .. import paths
+
+            work = paths.job_work_dir(job.id)
+            work.mkdir(parents=True, exist_ok=True)
+            lock = FileLock(work / "pipeline.lock")
+            try:
+                lock.acquire(timeout=0)
+            except Timeout:
+                log.info("Job %s is still owned by a live local process.", job.id)
+                continue
+            else:
+                lock.release()
             log.info("Requeuing job %s, interrupted by a restart.", job.id)
             store.update_job(job.id, status="queued", error=None)
 
@@ -97,6 +111,10 @@ class JobQueue:
 
     def is_cancelled(self, job_id: str) -> bool:
         return job_id in self._cancel_requested
+
+    def clear_cancel(self, job_id: str) -> None:
+        """A queued cancellation must not poison a later explicit retry."""
+        self._cancel_requested.discard(job_id)
 
     def status(self) -> QueueStatus:
         return QueueStatus(

@@ -8,6 +8,7 @@ trim-handle snapping all derive from it.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,6 +23,38 @@ class TranscriptionError(RuntimeError):
     """Transcription could not be completed."""
 
 
+def decoding_options(settings: WhisperSettings) -> dict:
+    return {
+        "language": settings.language or None,
+        "task": "transcribe",
+        "beam_size": settings.beam_size,
+        "temperature": settings.temperature,
+        "vad_filter": settings.vad_filter,
+        "condition_on_previous_text": settings.condition_on_previous_text,
+        "word_timestamps": True,
+        "hallucination_silence_threshold": 1.0,
+        "vad_parameters": {"min_silence_duration_ms": 500},
+    }
+
+
+def normalize_timestamps(words: list[Word], duration: float) -> int:
+    """Constrain measured times without removing repeated words or changing text."""
+    changed, previous = 0, 0.0
+    import math
+
+    epsilon = min(0.001, duration / (len(words) + 1))
+    for index, word in enumerate(words):
+        if not math.isfinite(word.start) or not math.isfinite(word.end) or duration <= 0:
+            raise TranscriptionError("Invalid ASR word timestamps; retry transcription.")
+        remaining = len(words) - index - 1
+        start = min(max(previous, word.start, 0.0), max(0.0, duration - (remaining + 1) * epsilon))
+        end = min(duration - remaining * epsilon, max(start + epsilon, word.end))
+        changed += start != word.start or end != word.end
+        word.start, word.end = start, end
+        previous = end
+    return changed
+
+
 def resolve_compute(settings: WhisperSettings, gpu: GPUInfo | None = None) -> tuple[str, str]:
     """Return the ``(device, compute_type)`` to run Whisper with.
 
@@ -30,6 +63,8 @@ def resolve_compute(settings: WhisperSettings, gpu: GPUInfo | None = None) -> tu
     message that points at cuDNN rather than at the setting, so an unsupported
     override is warned about and ignored rather than honoured into a crash.
     """
+    if os.environ.get("CLIPFORGE_CPU") == "1":
+        return "cpu", "int8"
     gpu = gpu if gpu is not None else report().gpu
     automatic = gpu.compute_type
 
@@ -85,10 +120,42 @@ def _model_load_error(exc: Exception, device: str, compute_type: str) -> Transcr
 def transcribe(
     audio: Path,
     settings: WhisperSettings | None = None,
+    **kwargs,
+) -> Transcript:
+    """Run Whisper sequentially; retry CUDA runtime failures on CPU int8."""
+    import gc
+
+    try:
+        try:
+            transcript = _transcribe_once(audio, settings, **kwargs)
+            if settings and settings.alignment == "whisperx":
+                from .alignment import align_transcript
+
+                align_transcript(audio, transcript)
+            return transcript
+        except (RuntimeError, OSError) as exc:
+            if not any(
+                term in str(exc).lower()
+                for term in ("cuda", "cudnn", "cublas", "dll", "out of memory")
+            ):
+                raise
+            if kwargs.get("cancelled") and kwargs["cancelled"]():
+                raise
+            log.warning("GPU transcription failed (%s); retrying on CPU int8.", exc)
+            gc.collect()
+            return _transcribe_once(audio, settings, force_cpu=True, **kwargs)
+    finally:
+        gc.collect()
+
+
+def _transcribe_once(
+    audio: Path,
+    settings: WhisperSettings | None = None,
     *,
     duration_s: float | None = None,
     on_progress: Callable[[float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    force_cpu: bool = False,
 ) -> Transcript:
     """Transcribe an audio file into a :class:`Transcript` with word timings.
 
@@ -111,7 +178,7 @@ def transcribe(
             "faster-whisper is not installed. Run `autoclip doctor` for details."
         ) from exc
 
-    device, compute_type = resolve_compute(settings)
+    device, compute_type = ("cpu", "int8") if force_cpu else resolve_compute(settings)
     log.info(
         "Transcribing with model=%s device=%s compute_type=%s",
         settings.model,
@@ -120,68 +187,86 @@ def transcribe(
     )
 
     try:
-        model = WhisperModel(settings.model, device=device, compute_type=compute_type)
+        from .. import paths
+
+        model = WhisperModel(
+            settings.model,
+            device=device,
+            compute_type=compute_type,
+            download_root=str(paths.root() / "huggingface"),
+        )
     except Exception as exc:
         raise _model_load_error(exc, device, compute_type) from exc
 
-    segments_iter, info = model.transcribe(
-        str(audio),
-        language=settings.language or None,
-        word_timestamps=True,
-        vad_filter=True,
-        # Trims long silences before decoding, which both speeds things up and
-        # stops Whisper hallucinating text into empty audio.
-        vad_parameters={"min_silence_duration_ms": 500},
-    )
+    try:
+        segments_iter, info = model.transcribe(
+            str(audio),
+            **decoding_options(settings),
+        )
 
-    total = duration_s or getattr(info, "duration", 0.0) or 0.0
-    transcript = Transcript(
-        language=getattr(info, "language", "") or settings.language,
-        model=settings.model,
-        source="whisper",
-    )
+        total = duration_s or getattr(info, "duration", 0.0) or 0.0
+        transcript = Transcript(
+            language=getattr(info, "language", "") or settings.language,
+            model=settings.model,
+            source="whisper",
+        )
 
-    for segment in segments_iter:
-        if cancelled is not None and cancelled():
-            raise TranscriptionError("Transcription cancelled.")
+        for segment in segments_iter:
+            if cancelled is not None and cancelled():
+                raise TranscriptionError("Transcription cancelled.")
 
-        first_word = len(transcript.words)
-        for word in getattr(segment, "words", None) or []:
-            text = (word.word or "").strip()
-            if not text:
-                continue
-            transcript.words.append(Word(text=text, start=float(word.start), end=float(word.end)))
+            first_word = len(transcript.words)
+            for word in getattr(segment, "words", None) or []:
+                text = (word.word or "").strip()
+                if not text:
+                    continue
+                transcript.words.append(
+                    Word(text=text, start=float(word.start), end=float(word.end))
+                )
 
-        # A segment with no word timings still carries text worth keeping for
-        # display, but it can't contribute to word-indexed clip boundaries.
-        last_word = max(first_word, len(transcript.words) - 1)
-        transcript.segments.append(
-            Segment(
-                text=(segment.text or "").strip(),
-                start=float(segment.start),
-                end=float(segment.end),
-                first_word=first_word,
-                last_word=last_word,
+            # A segment with no word timings still carries text worth keeping for
+            # display, but it can't contribute to word-indexed clip boundaries.
+            last_word = max(first_word, len(transcript.words) - 1)
+            transcript.segments.append(
+                Segment(
+                    text=(segment.text or "").strip(),
+                    start=float(segment.start),
+                    end=float(segment.end),
+                    first_word=first_word,
+                    last_word=last_word,
+                )
             )
+
+            if on_progress and total:
+                on_progress(min(1.0, float(segment.end) / total))
+
+        if not transcript.words:
+            raise TranscriptionError(
+                "No speech was detected in this audio. If the file really does contain "
+                "speech, try a larger Whisper model or check that the correct audio track "
+                "was extracted."
+            )
+
+        if on_progress:
+            on_progress(1.0)
+
+        transcript.metadata = {
+            "decoding": decoding_options(settings),
+            "device": device,
+            "compute_type": compute_type,
+            "language_probability": getattr(info, "language_probability", None),
+            "timestamp_adjustments": normalize_timestamps(
+                transcript.words, total or transcript.duration
+            ),
+            "alignment": "whisper-word-timestamps",
+        }
+
+        log.info(
+            "Transcribed %d words in %d segments.", len(transcript.words), len(transcript.segments)
         )
-
-        if on_progress and total:
-            on_progress(min(1.0, float(segment.end) / total))
-
-    if not transcript.words:
-        raise TranscriptionError(
-            "No speech was detected in this audio. If the file really does contain "
-            "speech, try a larger Whisper model or check that the correct audio track "
-            "was extracted."
-        )
-
-    if on_progress:
-        on_progress(1.0)
-
-    log.info(
-        "Transcribed %d words in %d segments.", len(transcript.words), len(transcript.segments)
-    )
-    return transcript
+        return transcript
+    finally:
+        model.model.unload_model()
 
 
 # --------------------------------------------------------------------------

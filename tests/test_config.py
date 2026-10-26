@@ -12,7 +12,7 @@ from autoclip import config, paths
 def test_defaults_load_without_a_config_file() -> None:
     settings = config.load()
 
-    assert settings.active_provider == "anthropic"
+    assert settings.active_provider == "ollama"
     assert settings.whisper.model == "small"
     assert settings.export.loudness_lufs == -14.0
     assert set(settings.providers) == {"anthropic", "openai", "gemini", "ollama"}
@@ -37,7 +37,7 @@ def test_load_falls_back_to_defaults_on_corrupt_file() -> None:
 
     settings = config.load()
 
-    assert settings.active_provider == "anthropic"
+    assert settings.active_provider == "ollama"
 
 
 def test_provider_returns_active_by_default() -> None:

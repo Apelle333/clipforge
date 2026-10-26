@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { formatTimecode, type CaptionStyle, type CropPath, type Word } from '../api'
+import { formatTimecode, type CaptionStyle, type CropPath, type Word, type CaptionLayout } from '../api'
 
 const VOLUME_KEY = 'autoclip.volume'
 
@@ -12,7 +12,7 @@ const ASPECTS: Record<string, [number, number]> = {
 }
 
 /** Tallest the preview may be, so the transport row stays on screen. */
-const MAX_HEIGHT_VH = 62
+const MAX_HEIGHT_VH = 66
 
 function readStoredVolume(): number {
   const stored = Number(window.localStorage.getItem(VOLUME_KEY))
@@ -35,6 +35,7 @@ export function ClipPlayer({
   style,
   ratio,
   cropPath,
+  layout,
 }: {
   src: string
   startS: number
@@ -43,6 +44,7 @@ export function ClipPlayer({
   style: CaptionStyle | undefined
   ratio: string
   cropPath?: CropPath | null
+  layout?: CaptionLayout | null
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
@@ -102,6 +104,15 @@ export function ClipPlayer({
     setTime(element.currentTime)
   }, [endS, startS])
 
+  // timeupdate alone is typically only 4 Hz and visibly lags word highlights.
+  useEffect(()=>{
+    if (!playing) return
+    let frame=0
+    const tick=()=>{onTimeUpdate();frame=requestAnimationFrame(tick)}
+    frame=requestAnimationFrame(tick)
+    return ()=>cancelAnimationFrame(frame)
+  },[playing,onTimeUpdate])
+
   const toggle = () => {
     const element = video.current
     if (!element) return
@@ -121,6 +132,7 @@ export function ClipPlayer({
   const duration = Math.max(0.01, endS - startS)
 
   const cropStyle = cropWindowStyle(cropPath, elapsed)
+  const fitted = cropPath?.segments.find(s=>s.start_s <= elapsed && elapsed <= s.end_s)?.fit
   const [aspectW, aspectH] = ASPECTS[ratio] ?? ASPECTS['9:16']
   // Height alone can't bound the box: with width:100% and an aspect-ratio, a
   // max-height clamp shortens the element without narrowing it, so the rendered
@@ -132,7 +144,7 @@ export function ClipPlayer({
     <div className="mx-auto flex w-full flex-col items-stretch" style={{ maxWidth }}>
       <div
         className="relative w-full overflow-hidden bg-ink-850"
-        style={{ aspectRatio: `${aspectW} / ${aspectH}` }}
+        style={{ aspectRatio: `${aspectW} / ${aspectH}`, containerType: 'size' }}
         onClick={toggle}
         role="button"
         tabIndex={0}
@@ -147,15 +159,18 @@ export function ClipPlayer({
         <video
           ref={video}
           src={src}
-          className={cropStyle ? 'absolute max-w-none' : 'size-full object-cover'}
+          className={cropStyle ? 'absolute max-w-none' : fitted ? 'size-full object-contain' : 'size-full object-cover'}
           style={cropStyle ?? undefined}
           onTimeUpdate={onTimeUpdate}
+          onPlay={()=>setPlaying(true)}
+          onPause={()=>setPlaying(false)}
+          onLoadedMetadata={()=>{if(video.current)video.current.currentTime=startS}}
           preload="auto"
           playsInline
           controls={nativeControls}
         />
 
-        <CaptionOverlay words={words} time={time} style={style} />
+        <CaptionOverlay words={words} time={time} style={style} layout={layout} />
 
         {!playing && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
@@ -166,7 +181,7 @@ export function ClipPlayer({
         )}
       </div>
 
-      <div className="mt-3 flex w-full items-center gap-4">
+      <div className="mt-3 grid w-full grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2">
         <button onClick={toggle} className="btn btn-quiet -ml-1 w-14 justify-start">
           {playing ? 'Pause' : 'Play'}
         </button>
@@ -182,13 +197,9 @@ export function ClipPlayer({
           onToggleMute={() => setMuted((current) => !current)}
         />
 
-        <div className="h-px flex-1 bg-ink-800">
-          <div
-            className="h-px origin-left bg-sodium-500"
-            style={{ transform: `scaleX(${elapsed / duration})` }}
-          />
-        </div>
-        <span className="numeric text-xs text-ink-500">
+        <input type="range" min={startS} max={endS} step={1/30} value={Math.min(endS,time)} aria-label="Seek preview"
+          className="col-span-2 row-start-2 w-full accent-sodium-500" onChange={e=>{const t=Number(e.target.value);if(video.current)video.current.currentTime=t;setTime(t)}} />
+        <span className="numeric col-span-2 text-right text-xs text-ink-400">
           {formatTimecode(elapsed)} / {formatTimecode(duration)}
         </span>
       </div>
@@ -454,29 +465,32 @@ function CaptionOverlay({
   words,
   time,
   style,
+  layout,
 }: {
   words: Word[]
   time: number
   style: CaptionStyle | undefined
+  layout?: CaptionLayout | null
 }) {
-  if (!style || words.length === 0) return null
+  if (!style || words.length === 0 || !layout) return null
 
-  const groups = groupWords(words, style.preview.maxWords)
-  const active = groups.find((group) => time >= group[0].start && time <= group[group.length - 1].end)
-  if (!active) return null
+  const group = layout.groups.find((g) => g.words.length && time >= g.words[0].start && time <= g.words[g.words.length-1].end)
+  if (!group) return null
+  const active = group.words
 
-  const { primary, accent, allCaps, outlineWidth, boxed, marginRatio, sizeRatio } = style.preview
+  const { primary, accent, allCaps, outlineWidth, boxed } = style.preview
 
   return (
     <div
       className="pointer-events-none absolute inset-x-0 flex justify-center px-[6%]"
-      style={{ bottom: `${marginRatio * 100}%` }}
+      style={{ bottom: `${layout.bottom * 100}%` }}
     >
       <p
         className="text-center leading-[1.15]"
         style={{
           fontFamily: style.preview.font === 'Anton' ? 'Anton, Impact, sans-serif' : undefined,
-          fontSize: `clamp(0.75rem, ${sizeRatio * 100}cqh, 4rem)`,
+            fontSize: `${group.font_size / layout.height * 100}cqh`,
+            maxWidth: `${layout.max_width * 100}%`,
           fontWeight: boxed || style.preview.font === 'Anton' ? 400 : 600,
           textTransform: allCaps ? 'uppercase' : 'none',
           color: primary,
@@ -495,38 +509,15 @@ function CaptionOverlay({
               style={{
                 color: isActive && accent ? accent : undefined,
                 display: 'inline-block',
-                transform: isActive && accent ? 'scale(1.08)' : undefined,
+                transform: isActive && accent && style.preview.animation === 'scale' ? 'scale(1.18)' : undefined,
                 transition: 'transform 120ms cubic-bezier(0.16,1,0.3,1)',
-                marginInline: '0.14em',
               }}
             >
-              {allCaps ? word.text.toUpperCase() : word.text}
+              {index > 0 && !/^[’'.,!?;:]/.test(word.text) && !/[’']$/.test(active[index-1].text) ? '\u00a0' : ''}{allCaps ? word.text.toUpperCase() : word.text}
             </span>
           )
         })}
       </p>
     </div>
   )
-}
-
-function groupWords(words: Word[], maxWords: number): Word[][] {
-  const groups: Word[][] = []
-  let current: Word[] = []
-
-  for (const [index, word] of words.entries()) {
-    if (current.length > 0) {
-      const gap = word.start - current[current.length - 1].end
-      if (gap > 0.4 || current.length >= maxWords) {
-        groups.push(current)
-        current = []
-      }
-    }
-    current.push(word)
-    if (/[.!?…]$/.test(word.text.trim()) && index !== words.length - 1) {
-      groups.push(current)
-      current = []
-    }
-  }
-  if (current.length > 0) groups.push(current)
-  return groups
 }

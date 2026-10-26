@@ -9,6 +9,7 @@ tight single to sit in one clip without a mid-stream frame-size change.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -186,7 +187,11 @@ def encoder_args(settings: ExportSettings) -> list[str]:
     rather than ``-crf``, and the two scales are close enough that reusing the
     configured value keeps output consistent between machines.
     """
-    if settings.prefer_hardware_encoder and report().ffmpeg.nvenc_works:
+    if (
+        settings.prefer_hardware_encoder
+        and os.environ.get("CLIPFORGE_CPU") != "1"
+        and report().ffmpeg.nvenc_works
+    ):
         return [
             "-c:v",
             "h264_nvenc",

@@ -94,7 +94,7 @@ class TestSettings:
     def test_get_returns_defaults(self, client: TestClient) -> None:
         body = client.get("/api/settings").json()
 
-        assert body["active_provider"] == "anthropic"
+        assert body["active_provider"] == "ollama"
         assert body["whisper"]["model"] == "small"
 
     def test_partial_update_leaves_other_sections_alone(self, client: TestClient) -> None:
@@ -102,7 +102,7 @@ class TestSettings:
 
         body = client.get("/api/settings").json()
         assert body["whisper"]["model"] == "large-v3"
-        assert body["clips"]["max_clips"] == 10
+        assert body["clips"]["max_clips"] == 5
 
     def test_provider_switch(self, client: TestClient) -> None:
         response = client.put("/api/settings", json={"active_provider": "ollama"})

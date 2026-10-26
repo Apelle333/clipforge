@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -95,12 +96,22 @@ def config_path() -> Path:
 
 def job_work_dir(job_id: str) -> Path:
     """Return the per-job scratch directory for pipeline stage artifacts."""
-    return work_dir() / job_id
+    return work_dir() / _safe_identifier(job_id)
 
 
 def source_media_dir(source_id: str) -> Path:
     """Return the directory holding a source's downloaded/uploaded media."""
-    return media_dir() / source_id
+    return media_dir() / _safe_identifier(source_id)
+
+
+class InvalidArtifactIdentifier(ValueError):
+    pass
+
+
+def _safe_identifier(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+        raise InvalidArtifactIdentifier("Invalid artifact identifier")
+    return value
 
 
 def ensure_layout() -> Path:

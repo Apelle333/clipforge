@@ -100,6 +100,7 @@ class TranscriptWindow:
     last_word: int
     duration_s: float = 0.0
     speakers: list[str] = field(default_factory=list)
+    word_times: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def word_count(self) -> int:
@@ -108,6 +109,7 @@ class TranscriptWindow:
 
 @dataclass
 class DetectionConfig:
+    require_complete_sentences: bool = False
     min_duration_s: float = 20.0
     max_duration_s: float = 90.0
     max_clips: int = 10

@@ -19,7 +19,11 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
-console = Console()
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+console = Console(legacy_windows=False)
 
 OK = "[green]OK[/green]"
 WARN = "[yellow]WARN[/yellow]"
@@ -665,8 +669,23 @@ def serve(
         )
 
     if open_browser and not reload:
-        # Delayed so the browser doesn't race the server's first bind.
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
+        def open_when_ready():
+            import time
+
+            import httpx
+
+            for _ in range(120):
+                try:
+                    response = httpx.get(f"{url}/api/health", timeout=0.5, trust_env=False)
+                    if response.status_code == 200:
+                        webbrowser.open(url)
+                        return
+                except httpx.HTTPError:
+                    pass
+                time.sleep(0.25)
+
+        threading.Thread(target=open_when_ready, daemon=True).start()
 
     uvicorn.run(
         "autoclip.app:app",

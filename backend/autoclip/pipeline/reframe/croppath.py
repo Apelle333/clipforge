@@ -304,3 +304,30 @@ def segment_crop_filter(segment: CropSegment, *, relative: bool = True) -> str:
     y_expr = y_expr.replace(",", "\\,")
 
     return f"crop=w={width}:h={height}:x='{x_expr}':y='{y_expr}'"
+
+
+def manual_crop(width, height, duration, ratio, options):
+    """Explicit static framing: no detection, no crop movement, same preview/export plan."""
+    aw, ah = map(int, ratio.split(":"))
+    cw, ch = target_crop_size(width, height, aw, ah)
+    fit = options.framing == "fit"
+    return CropPath(
+        width,
+        height,
+        [
+            CropSegment(
+                start_s=0,
+                end_s=duration,
+                width=width if fit else cw,
+                height=height if fit else ch,
+                fit=fit,
+                keyframes=[
+                    CropKeyframe(
+                        0,
+                        0 if fit else round((width - cw) * options.manual_x),
+                        0 if fit else round((height - ch) * options.manual_y),
+                    )
+                ],
+            )
+        ],
+    )

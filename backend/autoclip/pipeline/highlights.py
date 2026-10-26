@@ -12,8 +12,10 @@ buys back the clips that live on the seams.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from ..db.models import Clip, new_id
 from ..providers import ClipCandidate, DetectionConfig, LLMProvider, TranscriptWindow
@@ -92,6 +94,7 @@ def _make_window(transcript: Transcript, first: int, last: int) -> TranscriptWin
         last_word=last,
         duration_s=end_s - start_s,
         speakers=speakers,
+        word_times=[(w.start, w.end) for w in words],
     )
 
 
@@ -129,7 +132,16 @@ async def detect(
     on_progress: Callable[[float], None] | None = None,
 ) -> list[Clip]:
     """Run detection across the whole transcript and return ranked clips."""
-    windows = build_windows(transcript)
+    config = replace(
+        config,
+        language=config.language or transcript.language,
+        require_complete_sentences=provider.name == "ollama",
+    )
+    windows = (
+        build_windows(transcript, window_s=180, overlap_s=30)
+        if provider.name == "ollama"
+        else build_windows(transcript)
+    )
     if not windows:
         raise HighlightError("The transcript is empty, so there is nothing to clip.")
 
@@ -138,6 +150,7 @@ async def detect(
     concurrency = LOCAL_CONCURRENCY if provider.name == "ollama" else HOSTED_CONCURRENCY
     semaphore = asyncio.Semaphore(concurrency)
     completed = 0
+    failures = []
     lock = asyncio.Lock()
 
     async def run_window(window: TranscriptWindow) -> list[ClipCandidate]:
@@ -147,6 +160,7 @@ async def detect(
                 result = await provider.detect_highlights(window, config)
                 candidates = result.clips
             except Exception as exc:
+                failures.append(str(exc))
                 # One bad window shouldn't lose the whole video's other windows.
                 log.warning(
                     "Window %d-%d failed (%s); continuing with the remaining windows.",
@@ -163,12 +177,36 @@ async def detect(
 
     results = await asyncio.gather(*(run_window(w) for w in windows))
     candidates = [c for group in results for c in group]
+    from .. import paths
+
+    audit = paths.job_work_dir(job_id)
+    from .readability import transcript_revision
+
+    audit.mkdir(parents=True, exist_ok=True)
+    (audit / "highlight-status.json").write_text(
+        json.dumps(
+            {
+                "status": "failed"
+                if failures and not candidates
+                else ("partial" if failures else "ok"),
+                "language": config.language,
+                "transcript_revision": transcript_revision(transcript.words),
+                "failures": failures,
+                "candidate_count": len(candidates),
+                "responses": getattr(provider, "responses", []),
+                "comparison": getattr(provider, "editorial_audit", []),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     if not candidates:
         raise HighlightError(
             "No clips were found. This can mean the video genuinely has no "
             "self-contained highlights, or that the model struggled with the "
-            "transcript — try a larger model or a different provider."
+            "transcript. AI scoring status: "
+            + ("; ".join(failures[-2:]) if failures else "No supported highlights returned.")
         )
 
     log.info("Providers proposed %d raw candidates.", len(candidates))
@@ -187,8 +225,19 @@ def build_clips(
     deduped = dedupe(candidates)
     log.info("%d candidates remain after dedupe.", len(deduped))
 
+    from ..providers.editorial import editorial_exclusion, grounded_title
+
     clips: list[Clip] = []
+    exclusions = {}
     for candidate in deduped:
+        if config.require_complete_sentences:
+            text = transcript.text_between(candidate.start_word_index, candidate.end_word_index)
+            exclusion = editorial_exclusion(
+                text, transcript.words[candidate.start_word_index].start
+            )
+            if exclusion:
+                exclusions[str(candidate.start_word_index)] = exclusion
+                continue
         boundary = boundaries.refine(
             transcript,
             candidate.start_word_index,
@@ -205,6 +254,15 @@ def build_clips(
             )
             continue
 
+        if config.require_complete_sentences and (
+            (
+                boundary.start_word > 0
+                and not transcript.words[boundary.start_word - 1].ends_sentence
+            )
+            or not transcript.words[boundary.end_word].ends_sentence
+        ):
+            continue
+
         clips.append(
             Clip(
                 id=new_id(),
@@ -213,25 +271,69 @@ def build_clips(
                 end_s=boundary.end_s,
                 start_word=boundary.start_word,
                 end_word=boundary.end_word,
-                title=candidate.title.strip()
-                or transcript.text_between(
-                    boundary.start_word, min(boundary.start_word + 8, boundary.end_word)
+                title=grounded_title(
+                    candidate.title, transcript.text_between(boundary.start_word, boundary.end_word)
                 ),
-                hook=candidate.hook.strip(),
+                hook=transcript.text_between(
+                    boundary.start_word, min(boundary.end_word, boundary.start_word + 9)
+                ),
                 score=candidate.score,
-                reason=candidate.reason.strip(),
+                reason=candidate.reason
+                or transcript.text_between(
+                    boundary.start_word, min(boundary.end_word, boundary.start_word + 34)
+                ),
             )
         )
 
     # Refinement can move edges enough that two survivors now overlap.
     clips = _dedupe_clips(clips)
     clips.sort(key=lambda c: c.score, reverse=True)
+    if config.require_complete_sentences:
+        diverse = []
+        for clip in clips:
+            if any(
+                max(0, min(clip.end_s, other.end_s) - max(clip.start_s, other.start_s))
+                / min(clip.duration_s, other.duration_s)
+                > 0.3
+                for other in diverse
+            ):
+                continue
+            diverse.append(clip)
+        clips = diverse
     clips = clips[: config.max_clips]
 
     for rank, clip in enumerate(clips, start=1):
         clip.rank = rank
 
     log.info("Produced %d final clips.", len(clips))
+    if job_id:
+        from .. import paths
+
+        directory = paths.job_work_dir(job_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "selection.json").write_text(
+            json.dumps(
+                {
+                    "note": (
+                        "Subjective model scores, not objective quality. Selection uses score, "
+                        "overlap deduplication and duration constraints; ties are retained."
+                    ),
+                    "selected": [
+                        {
+                            "title": c.title,
+                            "score": c.score,
+                            "start_word": c.start_word,
+                            "end_word": c.end_word,
+                        }
+                        for c in clips
+                    ],
+                    "alternatives": [c.model_dump() for c in deduped],
+                    "exclusions": exclusions,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
     return clips
 
 

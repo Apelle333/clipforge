@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autoclip"
-version = "0.1.0.dev0"
+version = "0.1.0a1"
 description = "Open-source, local-first AI video clipper — long video in, caption-burned 9:16 clips out."
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [{ name = "Jad Ghazi" }]
+authors = [{ name = "Jad Ghazi" }, { name = "CLIPFORGE contributors" }]
 keywords = ["video", "shorts", "clips", "whisper", "ffmpeg", "captions", "tiktok", "reels"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -39,6 +39,8 @@ dependencies = [
   "yt-dlp>=2026.1.1",
   # Transcription
   "faster-whisper>=1.1",
+  # PyAV 19 removed metadata_errors, still used by faster-whisper's decoder.
+  "av==16.1.0",
   # Reframe
   "mediapipe>=0.10.14",
   # No [opencv] extra: scenedetect 0.7 dropped it and now depends on
@@ -50,6 +52,8 @@ dependencies = [
   "numpy>=1.26",
   # Captions
   "pysubs2>=1.7",
+  "Pillow>=10",
+  "filelock>=3.0",
   # Providers
   "anthropic>=0.40",
   "openai>=1.55",
@@ -87,9 +91,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/artbyjazi/autoclip"
-Repository = "https://github.com/artbyjazi/autoclip"
-Issues = "https://github.com/artbyjazi/autoclip/issues"
+Homepage = "https://github.com/Apelle333/clipforge"
+Repository = "https://github.com/Apelle333/clipforge"
+Issues = "https://github.com/Apelle333/clipforge/issues"
 
 [project.scripts]
 autoclip = "autoclip.cli:app"

@@ -98,7 +98,10 @@ def refine(
 
     # Alignment can only ever widen the clip, so re-check the ceiling.
     if end_s - start_s > max_duration_s:
-        end_s = start_s + max_duration_s
+        # Remove padding, never the last measured spoken word.
+        spoken_end = transcript.words[end_word].end
+        start_s = max(start_s, spoken_end - max_duration_s)
+        end_s = min(end_s, start_s + max_duration_s)
 
     return Boundary(
         start_s=max(0.0, start_s), end_s=end_s, start_word=start_word, end_word=end_word

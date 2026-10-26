@@ -349,12 +349,17 @@ def _module_available(name: str) -> bool:
         return False
 
 
-def _probe_ollama(base_url: str = "http://localhost:11434") -> tuple[bool, list[str]]:
+def _probe_ollama(base_url: str | None = None) -> tuple[bool, list[str]]:
     """Return (running, model names). Never raises."""
     try:
         import httpx
 
-        resp = httpx.get(f"{base_url}/api/tags", timeout=2.0)
+        if base_url is None:
+            from .config import load
+
+            base_url = load().provider("ollama").base_url or "http://127.0.0.1:11436"
+
+        resp = httpx.get(f"{base_url}/api/tags", timeout=2.0, trust_env=False)
         resp.raise_for_status()
         models = [m.get("name", "") for m in resp.json().get("models", [])]
         return True, [m for m in models if m]

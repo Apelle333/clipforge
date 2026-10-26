@@ -1,0 +1,92 @@
+[
+  {
+    "file": "frontend\\src\\fonts\\Archivo-Variable.ttf",
+    "sha256": "0e094a7d3c7c4c25cf1310c4b30014f1dae9332220b1c2c88f4fa996f0b05053",
+    "metadata": {
+      "0": [
+        "Copyright 2020 The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo)"
+      ],
+      "1": [
+        "Archivo SemiBold"
+      ],
+      "13": [
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL"
+      ],
+      "14": [
+        "http://scripts.sil.org/OFL"
+      ]
+    }
+  },
+  {
+    "file": "frontend\\src\\fonts\\InstrumentSerif-Italic.ttf",
+    "sha256": "08939b8bdf534afec24ae0ef5e03f948940cd9a8fe08e7fecbad040e62327385",
+    "metadata": {
+      "0": [
+        "Copyright 2022 The Instrument Serif Project Authors (https://github.com/Instrument/instrument-serif)"
+      ],
+      "1": [
+        "Instrument Serif"
+      ],
+      "13": [
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+      ],
+      "14": [
+        "https://scripts.sil.org/OFL"
+      ]
+    }
+  },
+  {
+    "file": "frontend\\src\\fonts\\InstrumentSerif-Regular.ttf",
+    "sha256": "498efd461f6ddfcb7a111bf9a565709d2085d48201d501ead960d93e84ffbb88",
+    "metadata": {
+      "0": [
+        "Copyright 2022 The Instrument Serif Project Authors (https://github.com/Instrument/instrument-serif)"
+      ],
+      "1": [
+        "Instrument Serif"
+      ],
+      "13": [
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+      ],
+      "14": [
+        "https://scripts.sil.org/OFL"
+      ]
+    }
+  },
+  {
+    "file": "backend\\autoclip\\assets\\fonts\\Anton-Regular.ttf",
+    "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+    "metadata": {
+      "0": [
+        "Copyright 2020 The Anton Project Authors (https://github.com/googlefonts/AntonFont.git)"
+      ],
+      "1": [
+        "Anton"
+      ],
+      "13": [
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+      ],
+      "14": [
+        "https://scripts.sil.org/OFL"
+      ]
+    }
+  },
+  {
+    "file": "backend\\autoclip\\assets\\fonts\\Inter-Variable.ttf",
+    "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
+    "metadata": {
+      "0": [
+        "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)"
+      ],
+      "1": [
+        "Inter"
+      ],
+      "13": [
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org"
+      ],
+      "14": [
+        "https://openfontlicense.org"
+      ]
+    }
+  }
+]

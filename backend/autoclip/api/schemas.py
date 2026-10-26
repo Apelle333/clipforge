@@ -122,6 +122,7 @@ class ExportOut(BaseModel):
     size_bytes: int
     created_at: str
     download_url: str
+    stale: bool = True
 
     @classmethod
     def of(cls, export: models.Export) -> ExportOut:
@@ -154,6 +155,8 @@ class ClipOut(BaseModel):
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
     exports: list[ExportOut] = Field(default_factory=list)
+    render_options: dict = Field(default_factory=dict)
+    render_revision: str = ""
 
     @classmethod
     def of(
@@ -200,9 +203,10 @@ class CaptionPatchIn(BaseModel):
 
 
 class ExportRequestIn(BaseModel):
-    ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
-    style: str = "bold_pop"
+    ratio: Literal["9:16", "1:1", "16:9"] | None = None
+    style: str | None = None
     write_srt: bool = False
+    expected_revision: str | None = None
 
 
 class CaptionStyleOut(BaseModel):

@@ -68,6 +68,7 @@ class Transcript:
     model: str = ""
     #: "whisper" or "youtube".
     source: str = "whisper"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # -- basic properties -------------------------------------------------
 
@@ -190,6 +191,7 @@ class Transcript:
             "language": self.language,
             "model": self.model,
             "source": self.source,
+            "metadata": self.metadata,
             "words": [asdict(w) for w in self.words],
             "segments": [asdict(s) for s in self.segments],
         }
@@ -202,6 +204,7 @@ class Transcript:
             language=data.get("language", ""),
             model=data.get("model", ""),
             source=data.get("source", "whisper"),
+            metadata=data.get("metadata", {}),
         )
 
     def save(self, path: Path) -> Path:

@@ -1,0 +1,14 @@
+CLIPFORGE is an independent adaptation of AutoClip by Jad Ghazi.
+Upstream: https://github.com/artbyjazi/autoclip
+Foundation commit: 5d0eac36fa615b79dd2104083bf273a96f8d68bb
+Upstream code is MIT licensed; its copyright and permission notice are retained
+in LICENSE. Original CLIPFORGE modifications are also MIT licensed.
+No OpenClipper or hotclip code was incorporated.
+
+Bundled Anton, Inter, Archivo and Instrument Serif fonts use SIL OFL 1.1,
+not MIT. Their notices and license texts are included beside the fonts and
+under docs/licenses. The font metadata manifest records their provenance.
+
+Model weights and FFmpeg executables are not included in this source release.
+Downloaded models and dependencies have separate licenses. See
+docs/THIRD-PARTY-NOTICES.md and docs/licenses for details.

@@ -31,7 +31,7 @@ export function TrimBar({
   useEffect(() => setLocal({ start: startS, end: endS }), [startS, endS])
 
   // Padding either side so a trim can be widened as well as tightened.
-  const windowStart = originalStart - 5
+  const windowStart = Math.max(0, originalStart - 5)
   const windowEnd = originalEnd + 5
   const span = Math.max(0.1, windowEnd - windowStart)
 
@@ -107,6 +107,11 @@ export function TrimBar({
         </span>
       </div>
 
+      <div className="mt-3 flex gap-4">
+        <label className="flex-1 text-xs text-ink-300">Start (seconds)<input className="field mt-1" type="number" min="0" step=".05" key={`start-${startS}`} defaultValue={startS.toFixed(2)} onBlur={e=>{const t=e.currentTarget.valueAsNumber;if(t>=0 && t<endS)onCommit(t,endS);else e.currentTarget.value=startS.toFixed(2)}} /></label>
+        <label className="flex-1 text-xs text-ink-300">End (seconds)<input className="field mt-1" type="number" min={startS+1} step=".05" key={`end-${endS}`} defaultValue={endS.toFixed(2)} onBlur={e=>{const t=e.currentTarget.valueAsNumber;if(t>startS)onCommit(startS,t);else e.currentTarget.value=endS.toFixed(2)}} /></label>
+      </div>
+      <p className="mt-2 text-xs text-ink-400">Word-density timeline · drag handles or enter exact times.</p>
       <div ref={track} className="relative mt-3 h-14 cursor-ew-resize bg-ink-850">
         {/* Word density as a crude waveform stand-in: taller where speech is
             dense, which is enough to aim a cut by. */}

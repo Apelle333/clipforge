@@ -70,6 +70,9 @@ def build_provider(name: str | None = None, settings: Settings | None = None) ->
             hint=f"Available providers: {', '.join(PROVIDERS)}",
         )
 
+    if key != "ollama":
+        raise ProviderError("CLIPFORGE Phase 01 is local-only. Select Ollama in Settings.")
+
     provider_settings = settings.provider(key)
     api_key = get_secret(key, settings) if provider_cls.requires_key else None
 

@@ -63,12 +63,17 @@ class WhisperSettings(BaseModel):
     #: Run WhisperX diarization to label words by speaker. Needs the
     #: ``diarization`` extra and a HuggingFace token.
     diarization: bool = False
+    beam_size: int = Field(default=5, ge=1, le=10)
+    temperature: float = Field(default=0.0, ge=0, le=1)
+    vad_filter: bool = True
+    condition_on_previous_text: bool = False
+    alignment: Literal["whisper", "whisperx"] = "whisper"
 
 
 class ClipSettings(BaseModel):
     min_duration_s: float = 20.0
     max_duration_s: float = 90.0
-    max_clips: int = 10
+    max_clips: int = 5
 
 
 class IngestSettings(BaseModel):
@@ -97,13 +102,13 @@ class ExportSettings(BaseModel):
 class Settings(BaseModel):
     """Top-level persisted settings."""
 
-    active_provider: ProviderName = "anthropic"
+    active_provider: ProviderName = "ollama"
     providers: dict[str, ProviderSettings] = Field(
         default_factory=lambda: {
             "anthropic": ProviderSettings(model="claude-sonnet-5"),
             "openai": ProviderSettings(model="gpt-4o"),
             "gemini": ProviderSettings(model="gemini-2.0-flash"),
-            "ollama": ProviderSettings(model="", base_url="http://localhost:11434"),
+            "ollama": ProviderSettings(model="phi4-mini:latest", base_url="http://127.0.0.1:11436"),
         }
     )
     whisper: WhisperSettings = Field(default_factory=WhisperSettings)

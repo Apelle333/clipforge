@@ -16,6 +16,7 @@ export function Settings() {
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [saved, setSaved] = useState(false)
+  const [languageMode, setLanguageMode] = useState<string | null>(null)
 
   const reload = () => {
     void api.getSettings().then(setSettings).catch((e) => setError(e as Error))
@@ -37,6 +38,7 @@ export function Settings() {
   }
 
   if (!settings) return <p className="pt-24 text-sm text-ink-500">Loading…</p>
+  const loadedModel = ['large-v3-turbo','large-v3','medium','small','base','tiny'].find((name)=>settings.whisper.model.includes(`faster-whisper-${name}`)) ?? settings.whisper.model
 
   return (
     <div className="max-w-4xl pt-14">
@@ -69,7 +71,7 @@ export function Settings() {
 
       <Section title="AI provider" note="Which model picks the clips.">
         <div className="space-y-1">
-          {providers.map((provider) => (
+          {providers.filter((provider) => provider.name === 'ollama').map((provider) => (
             <button
               key={provider.name}
               onClick={() => patch({ active_provider: provider.name })}
@@ -115,7 +117,7 @@ export function Settings() {
           />
           <Field
             label="Base URL"
-            hint="Point at OpenRouter, Groq, DeepSeek, or a local server."
+            hint="Dedicated local Ollama. Default: http://127.0.0.1:11436"
             value={settings.providers[settings.active_provider]?.base_url ?? ''}
             placeholder="https://…"
             onCommit={(value) =>
@@ -134,7 +136,7 @@ export function Settings() {
 
       <Section title="Keys" note="Stored in your OS keyring. Never sent anywhere but the provider.">
         <div className="space-y-4">
-          {Object.entries(SECRET_LABELS).map(([key, label]) => (
+          {Object.entries(SECRET_LABELS).filter(([key]) => key === 'huggingface_token').map(([key, label]) => (
             <SecretField
               key={key}
               secretKey={key}
@@ -151,17 +153,21 @@ export function Settings() {
         <div className="grid gap-5 sm:grid-cols-2">
           <Select
             label="Whisper model"
-            value={settings.whisper.model}
+            value={loadedModel}
             onChange={(value) => patch({ whisper: { ...settings.whisper, model: value } })}
-            options={['tiny', 'base', 'small', 'medium', 'large-v3']}
+            options={['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo']}
           />
-          <Field
-            label="Language"
-            hint="Leave empty to detect automatically."
-            value={settings.whisper.language}
-            placeholder="auto"
-            onCommit={(value) => patch({ whisper: { ...settings.whisper, language: value } })}
-          />
+          <label className="text-sm text-ink-200">Source language
+            <select className="field mt-2" value={languageMode ?? (['', 'it', 'en'].includes(settings.whisper.language) ? settings.whisper.language : 'other')}
+              onChange={(e) => { setLanguageMode(e.target.value); if (e.target.value !== 'other') void patch({whisper:{...settings.whisper,language:e.target.value}}) }}>
+              <option value="">Auto</option><option value="it">Italian</option><option value="en">English</option><option value="other">Other</option>
+            </select>
+          </label>
+          {(languageMode === 'other' || (!['', 'it', 'en'].includes(settings.whisper.language))) && <Field
+            label="Other language code" hint="ISO code, e.g. fr, de, es" value={settings.whisper.language} placeholder="ISO code"
+            onCommit={(value) => { if (/^[a-z]{2,3}$/.test(value)) void patch({whisper:{...settings.whisper,language:value}}) }} />}
+          <Select label="Word alignment" value={settings.whisper.alignment ?? 'whisper'} options={['whisper','whisperx']}
+            onChange={(value) => patch({whisper:{...settings.whisper,alignment:value}})} />
         </div>
 
         <label className="mt-5 flex items-start gap-3 text-sm text-ink-200">

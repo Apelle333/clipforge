@@ -147,6 +147,47 @@ async def system_status() -> SystemOut:
     )
 
 
+@router.get("/prerequisites")
+async def prerequisites() -> dict:
+    """Report installed models separately from the runtime library check."""
+    from pathlib import Path
+
+    from huggingface_hub import try_to_load_from_cache
+
+    from .. import paths
+
+    settings = config.load()
+    model = settings.whisper.model
+    cached = (
+        await asyncio.to_thread(
+            try_to_load_from_cache,
+            f"Systran/faster-whisper-{model}",
+            "model.bin",
+            cache_dir=paths.root() / "huggingface",
+        )
+        if not Path(model).is_dir()
+        else None
+    )
+    whisper_ready = (Path(model) / "model.bin").is_file() or isinstance(cached, str)
+    try:
+        provider = build_provider(settings=settings)
+        status = await provider.health_check()
+        ollama_ready = status.available and provider.model in status.models
+        detail = status.detail if not ollama_ready else provider.model
+    except Exception as exc:
+        ollama_ready, detail = False, str(exc)
+    return {
+        "whisper_ready": whisper_ready,
+        "ollama_ready": ollama_ready,
+        "face_ready": models.is_available("face_landmarker"),
+        "ollama_detail": detail,
+        "note": (
+            "Missing Whisper weights download on first use. "
+            "Missing face model uses centre framing if download fails."
+        ),
+    }
+
+
 @router.post("/system/models", status_code=204)
 async def fetch_models() -> None:
     """Download any missing ML model bundles."""

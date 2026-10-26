@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
+import os
 import tempfile
 from pathlib import Path
 
@@ -82,9 +82,21 @@ async def upload_source(file: UploadFile = File(...)) -> SourceOut:
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as staging:
         staging_path = Path(staging.name)
         try:
+            maximum = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_BYTES", str(5 * 1024**3)))
+            received = 0
             while chunk := await file.read(UPLOAD_CHUNK):
+                received += len(chunk)
+                if received > maximum:
+                    raise HTTPException(
+                        status_code=413, detail="Upload exceeds the configured size limit."
+                    )
                 staging.write(chunk)
+        except HTTPException:
+            staging.close()
+            staging_path.unlink(missing_ok=True)
+            raise
         except Exception as exc:
+            staging.close()
             staging_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="Upload failed.") from exc
 
@@ -98,7 +110,8 @@ async def upload_source(file: UploadFile = File(...)) -> SourceOut:
             status_code=422, detail={"message": str(exc), "hint": exc.hint}
         ) from exc
     finally:
-        shutil.rmtree(staging_path.parent / staging_path.name, ignore_errors=True)
+        staging_path.unlink(missing_ok=True)
+        await file.close()
 
     await asyncio.to_thread(store.create_source, source)
     return SourceOut.of(source)

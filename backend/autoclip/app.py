@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, db, paths
 from .api import api_router
@@ -78,6 +79,40 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
+    @app.exception_handler(paths.InvalidArtifactIdentifier)
+    async def invalid_artifact_id(request: Request, exc):
+        return JSONResponse(status_code=400, content={"detail": "Invalid artifact identifier."})
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"]
+    )
+
+    @app.middleware("http")
+    async def local_origin_only(request: Request, call_next):
+        from urllib.parse import urlparse
+
+        if "\\" in request.url.path or ".." in request.url.path.split("/"):
+            return JSONResponse(status_code=400, content={"detail": "Invalid request path."})
+
+        origin = request.headers.get("origin")
+        if request.url.path == "/api/sources/upload":
+            maximum = int(os.environ.get("CLIPFORGE_MAX_UPLOAD_BYTES", str(5 * 1024**3)))
+            try:
+                if int(request.headers.get("content-length", "0")) > maximum + 1024**2:
+                    return JSONResponse(
+                        status_code=413, content={"detail": "Upload exceeds size limit."}
+                    )
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Invalid content length."})
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
+            parsed = urlparse(origin)
+            if parsed.scheme not in {"http", "https"} or parsed.netloc != request.headers.get(
+                "host"
+            ):
+                return JSONResponse(
+                    status_code=403, content={"detail": "Cross-origin writes are blocked."}
+                )
+        return await call_next(request)
+
     @app.get("/api/health")
     async def health() -> dict:
         status = queue.status()
@@ -134,7 +169,9 @@ def _mount_frontend(app: FastAPI) -> None:
         if full_path.startswith("api/"):
             return JSONResponse(status_code=404, content={"detail": "Not found."})
 
-        candidate = directory / full_path
+        candidate = (directory / full_path).resolve()
+        if not candidate.is_relative_to(directory.resolve()):
+            return JSONResponse(status_code=404, content={"detail": "Not found."})
         if full_path and candidate.is_file():
             return FileResponse(candidate)
 

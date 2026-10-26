@@ -46,6 +46,7 @@ export interface ExportRecord {
   size_bytes: number
   created_at: string
   download_url: string
+  stale: boolean
 }
 
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
@@ -68,6 +69,8 @@ export interface Clip {
   caption_style: string
   ratio: string
   exports: ExportRecord[]
+  render_options: { framing: "auto" | "fit" | "manual"; manual_x: number; manual_y: number; size: number; max_width: number; bottom: number; subject_position: number; face_margin: number }
+  render_revision: string
 }
 
 export interface Word {
@@ -75,6 +78,11 @@ export interface Word {
   start: number
   end: number
   speaker: string | null
+}
+
+export interface CaptionLayout {
+  width: number; height: number; bottom: number; max_width: number
+  groups: {words: Word[]; font_size: number}[]
 }
 
 export interface CropKeyframe {
@@ -132,7 +140,7 @@ export interface ProviderStatus {
 export interface Settings {
   active_provider: string
   providers: Record<string, { model: string; base_url: string | null }>
-  whisper: { model: string; compute_type: string; language: string; diarization: boolean }
+  whisper: { model: string; compute_type: string; language: string; diarization: boolean; alignment?: string }
   clips: { min_duration_s: number; max_duration_s: number; max_clips: number }
   ingest: {
     ytdlp_format: string
@@ -258,6 +266,10 @@ export const api = {
 
   getCropPath: (clipId: string) => request<CropPath>(`/api/clips/${clipId}/crop-path`),
   getClipWords: (clipId: string) => request<Word[]>(`/api/clips/${clipId}/words`),
+  captionLayout: (clipId: string, words: Word[]) => request<CaptionLayout>(`/api/clips/${clipId}/caption-layout`, {method:'POST',body:JSON.stringify({words})}),
+  renderOptions: (clipId: string, options: Clip['render_options']) => request<Clip>(`/api/clips/${clipId}/render-options`, {method:'PUT',body:JSON.stringify(options)}),
+  readability: (clipId: string) => request<Word[]>(`/api/clips/${clipId}/readability`, {method:'POST'}),
+  reanalyze: (jobId: string) => request<Job>(`/api/jobs/${jobId}/reanalyze`, {method:'POST'}),
 
   patchClip: (
     clipId: string,
@@ -273,11 +285,12 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>
+  exportClip: (clipId: string, ratio?: string, style?: string, writeSrt = false) =>
     request<ExportRecord>(`/api/clips/${clipId}/export`, {
       method: 'POST',
       body: JSON.stringify({ ratio, style, write_srt: writeSrt }),
     }),
+  exportSavedClip: (clipId:string, revision:string) => request<ExportRecord>(`/api/clips/${clipId}/export`,{method:'POST',body:JSON.stringify({expected_revision:revision})}),
 
   captionStyles: () => request<CaptionStyle[]>('/api/caption-styles'),
   providerStatus: () => request<ProviderStatus[]>('/api/providers/status'),

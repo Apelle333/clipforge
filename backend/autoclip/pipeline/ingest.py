@@ -57,7 +57,10 @@ def is_youtube_url(url: str) -> bool:
     from urllib.parse import urlparse
 
     try:
-        host = (urlparse(url).hostname or "").lower()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+            return False
+        host = (parsed.hostname or "").lower()
     except ValueError:
         return False
     return host in _YOUTUBE_HOSTS

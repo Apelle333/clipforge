@@ -1,0 +1,10 @@
+services:
+  clipforge:
+    build:
+      target: gpu
+    environment:
+      CUDA_VISIBLE_DEVICES: '0'
+      CLIPFORGE_CPU: '0'
+    gpus: all
+  ollama:
+    gpus: all

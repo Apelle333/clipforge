@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useNavigate } from 'react-router-dom'
 
 import {
   api,
@@ -10,16 +10,19 @@ import {
   type CropPath,
   type Job,
   type Word,
+  type CaptionLayout,
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
 import { ClipPlayer } from '../components/ClipPlayer'
 import { ErrorNote } from '../components/ErrorNote'
 import { TrimBar } from '../components/TrimBar'
+import { exportSavedEdit } from '../editorActions'
 
 const RATIOS = ['9:16', '1:1', '16:9'] as const
 
 export function Review() {
   const { jobId } = useParams()
+  const navigate = useNavigate()
   const [job, setJob] = useState<Job | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [styles, setStyles] = useState<CaptionStyle[]>([])
@@ -30,9 +33,17 @@ export function Review() {
   const [savingWords, setSavingWords] = useState(false)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
+  const [layout,setLayout] = useState<CaptionLayout | null>(null)
+  const [savingOptions,setSavingOptions] = useState(false)
+  const [renderedUrl,setRenderedUrl] = useState<string | null>(null)
+  const [formatting,setFormatting] = useState(false)
+  const [comparison,setComparison] = useState<{note:string;exclusions?:Record<string,string>;alternatives:{title:string;score:number;reason:string;start_word_index:number;end_word_index:number}[]} | null>(null)
+  const [quality,setQuality] = useState<{status:string;failures:string[];language?:string;alignment?:string;alignment_warning?:string} | null>(null)
 
   useEffect(() => {
     if (!jobId) return
+    fetch(`/api/jobs/${jobId}/selection`).then(r=>r.ok?r.json():null).then(setComparison).catch(()=>setComparison(null))
+    fetch(`/api/jobs/${jobId}/quality-status`).then((r)=>r.json()).then(setQuality).catch(()=>setQuality(null))
     void Promise.all([api.getJob(jobId), api.listClips(jobId), api.captionStyles()])
       .then(([loadedJob, loadedClips, loadedStyles]) => {
         setJob(loadedJob)
@@ -50,18 +61,31 @@ export function Review() {
 
   useEffect(() => {
     if (!selected) return
+    let active = true
     setWordsDirty(false)
+    setWords([])
+    setCropPath(null)
     api
       .getClipWords(selected.id)
-      .then(setWords)
-      .catch(() => setWords([]))
+      .then((value) => { if (active) setWords(value) })
+      .catch(() => { if (active) setWords([]) })
     // 404 is expected for audio-only sources and jobs that never reframed; the
     // player falls back to a centre crop, matching what the renderer does.
     api
       .getCropPath(selected.id)
-      .then(setCropPath)
-      .catch(() => setCropPath(null))
+      .then((value) => { if (active) setCropPath(value) })
+      .catch(() => { if (active) setCropPath(null) })
+    return () => { active = false }
   }, [selected?.id])
+
+  useEffect(() => {
+    setRenderedUrl(null)
+    setLayout(null)
+    if (!selected || !words.length) return
+    let active=true
+    api.captionLayout(selected.id,words).then((value) => {if(active) setLayout(value)}).catch((err) => {if(active) setError(err)})
+    return () => {active=false}
+  },[selected?.id,selected?.caption_style,selected?.ratio,JSON.stringify(selected?.render_options),words])
 
   const patchClip = useCallback((updated: Clip) => {
     setClips((current) => current.map((clip) => (clip.id === updated.id ? updated : clip)))
@@ -75,14 +99,27 @@ export function Review() {
     }
   }
 
+  const saveOptions = async (options: Clip['render_options']) => {
+    if (!selected) return
+    setSavingOptions(true)
+    setRenderedUrl(null)
+    try { patchClip(await api.renderOptions(selected.id,options)); setCropPath(await api.getCropPath(selected.id)) }
+    catch(err) { setError(err as Error) } finally { setSavingOptions(false) }
+  }
+
   const commitTrim = async (start: number, end: number) => {
     if (!selected) return
+    setSavingOptions(true)
     try {
+      if (wordsDirty) await api.patchCaptions(selected.id,{words})
+      setRenderedUrl(null)
       patchClip(await api.patchClip(selected.id, { start_s: start, end_s: end }))
       setWords(await api.getClipWords(selected.id))
+      setCropPath(await api.getCropPath(selected.id))
+      setWordsDirty(false)
     } catch (err) {
       setError(err as Error)
-    }
+    } finally {setSavingOptions(false)}
   }
 
   const saveWords = async () => {
@@ -91,6 +128,7 @@ export function Review() {
     try {
       patchClip(await api.patchCaptions(selected.id, { words }))
       setWordsDirty(false)
+      fetch(`/api/jobs/${jobId}/quality-status`).then(r=>r.json()).then(setQuality).catch(()=>{})
     } catch (err) {
       setError(err as Error)
     } finally {
@@ -99,27 +137,32 @@ export function Review() {
   }
 
   const setStyle = async (clip: Clip, styleKey: string) => {
+    setSavingOptions(true)
     try {
       patchClip(await api.patchCaptions(clip.id, { caption_style: styleKey }))
     } catch (err) {
       setError(err as Error)
-    }
+    } finally {setSavingOptions(false)}
   }
 
   const setRatio = async (clip: Clip, ratio: string) => {
+    setSavingOptions(true)
     try {
       patchClip(await api.patchCaptions(clip.id, { ratio }))
+      setCropPath(await api.getCropPath(clip.id))
     } catch (err) {
       setError(err as Error)
-    }
+    } finally {setSavingOptions(false)}
   }
 
   const exportClip = async (clip: Clip) => {
     setExporting((current) => new Set(current).add(clip.id))
     setError(null)
     try {
-      await api.exportClip(clip.id, clip.ratio, clip.caption_style)
+      const record = await exportSavedEdit(api,clip.id, wordsDirty && selectedId === clip.id ? words : undefined)
+      if (selectedId === clip.id) setWordsDirty(false)
       patchClip(await api.getClip(clip.id))
+      if (selectedId === clip.id) setRenderedUrl(record.download_url)
     } catch (err) {
       setError(err as Error)
     } finally {
@@ -162,14 +205,20 @@ export function Review() {
         </div>
 
         <div className="flex items-baseline gap-6">
+          <button className="btn btn-quiet" disabled={savingWords || savingOptions || exporting.size>0} onClick={async()=>{
+            try {if (wordsDirty && selected) {await api.patchCaptions(selected.id,{words});setWordsDirty(false)}
+              const next=await api.reanalyze(jobId!);navigate(`/jobs/${next.id}`)
+            } catch(err){setError(err as Error)}
+          }}>Re-score corrected transcript</button>
           <span className="numeric text-xs text-ink-500">
             {clips.length} clips · {keptCount} kept
           </span>
-          <button onClick={exportKept} disabled={keptCount === 0} className="btn btn-primary">
+          <button onClick={exportKept} disabled={keptCount === 0 || exporting.size>0 || savingOptions || savingWords || formatting} className="btn btn-primary">
             Export kept
           </button>
         </div>
       </div>
+      {quality && <p className="mt-3 text-xs text-ink-300" role="status">AI scoring: {quality.status}{quality.failures.length>0 ? ` — ${quality.failures.length} window(s) failed; review partial results.` : ''}{quality.language ? ` · Language: ${quality.language}` : ''}{quality.alignment ? ` · Timing: ${quality.alignment}` : ''}{quality.alignment_warning ? ' · Forced alignment failed; original ASR times retained.' : ''}</p>}
 
       {error && (
         <div className="mt-6 max-w-3xl">
@@ -180,10 +229,10 @@ export function Review() {
       {clips.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="mt-8 grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,20rem)_minmax(0,26rem)_minmax(0,1fr)]">
+        <div className="mt-8 grid gap-x-10 gap-y-10 xl:grid-cols-[minmax(14rem,.7fr)_minmax(22rem,1.2fr)_minmax(22rem,1fr)] lg:grid-cols-2">
           {/* Ranked list */}
-          <section className="lg:max-h-[76vh] lg:overflow-y-auto lg:pr-1">
-            <p className="eyebrow border-b border-ink-800 pb-2">Ranked</p>
+          <section className="lg:max-h-[76vh] lg:overflow-y-auto lg:pr-1 lg:col-span-2 xl:col-span-1">
+            <p className="eyebrow border-b border-ink-800 pb-2">AI suggestions · subjective scores</p>
             <ul>
               {clips.map((clip, index) => (
                 <li key={clip.id}>
@@ -191,7 +240,11 @@ export function Review() {
                     clip={clip}
                     index={index}
                     selected={clip.id === selectedId}
-                    onSelect={() => setSelectedId(clip.id)}
+                    onSelect={async() => {
+                      if (savingWords || savingOptions || formatting || exporting.size>0) return
+                      try {if(wordsDirty && selected){await api.patchCaptions(selected.id,{words});setWordsDirty(false)};setSelectedId(clip.id)}
+                      catch(err){setError(err as Error)}
+                    }}
                     onKeep={() =>
                       setStatus(clip, clip.status === 'kept' ? 'candidate' : 'kept')
                     }
@@ -209,14 +262,21 @@ export function Review() {
             {selected && jobId && (
               <>
                 <ClipPlayer
-                  src={api.mediaUrl(jobId)}
-                  startS={selected.start_s}
-                  endS={selected.end_s}
-                  words={words}
-                  style={activeStyle}
+                  src={renderedUrl ?? api.mediaUrl(jobId)}
+                  startS={renderedUrl ? 0 : selected.start_s}
+                  endS={renderedUrl ? selected.duration_s : selected.end_s}
+                  words={renderedUrl ? [] : words}
+                  style={renderedUrl ? undefined : activeStyle}
                   ratio={selected.ratio}
-                  cropPath={cropPath}
+                  cropPath={renderedUrl ? null : cropPath}
+                  layout={layout}
                 />
+                <p className="text-xs text-ink-400">{renderedUrl ? 'Exact exported preview — this is the rendered MP4.' : 'Draft approximation — CSS captions and framing can differ. Render preview for exact output.'}
+                  {renderedUrl && <button className="btn btn-quiet" onClick={() => setRenderedUrl(null)}>Back to editing</button>}
+                </p>
+                {!renderedUrl && <button className="btn btn-ghost" disabled={exporting.size>0 || savingOptions || savingWords || formatting} onClick={()=>exportClip(selected)}>Render exact preview</button>}
+                {selected.exports.filter(e=>!e.stale).slice(-1).map(e=><button key={e.id} className="btn btn-quiet" disabled={wordsDirty} onClick={()=>setRenderedUrl(e.download_url)}>View current rendered preview</button>)}
+                <fieldset disabled={savingOptions || savingWords || formatting || exporting.size>0}>
                 <TrimBar
                   words={words}
                   startS={selected.start_s}
@@ -225,6 +285,7 @@ export function Review() {
                   originalEnd={selected.end_s}
                   onCommit={commitTrim}
                 />
+                </fieldset>
               </>
             )}
           </section>
@@ -234,7 +295,7 @@ export function Review() {
             {selected && (
               <>
                 <div>
-                  <p className="eyebrow">Why this clip</p>
+                  <p className="eyebrow">Selection notes · subjective model assessment</p>
                   <p className="mt-2 max-w-prose text-[0.9375rem] leading-relaxed text-ink-300">
                     {selected.reason || 'No rationale returned for this clip.'}
                   </p>
@@ -243,25 +304,67 @@ export function Review() {
                       “{selected.hook}”
                     </p>
                   )}
+                  {comparison && <details className="mt-4 text-sm text-ink-300">
+                    <summary className="cursor-pointer text-sodium-500">Compare alternative candidates</summary>
+                    <p className="mt-2 text-xs leading-relaxed">{comparison.note}</p>
+                    <ol className="mt-3 space-y-3">{comparison.alternatives.slice(0,8).map((c,i)=><li key={i} className="border-l border-ink-700 pl-3">
+                      <p>{c.score} · {c.title}</p><p className="mt-1 text-xs text-ink-400">{c.reason}</p>
+                      {comparison.exclusions?.[String(c.start_word_index)] && <p className="mt-1 text-xs text-sodium-500">{comparison.exclusions[String(c.start_word_index)]}</p>}
+                    </li>)}</ol>
+                  </details>}
                 </div>
 
+                <fieldset disabled={savingOptions || exporting.size>0}>
                 <CaptionEditor
                   words={words}
                   onChange={(next) => {
                     setWords(next)
                     setWordsDirty(true)
                   }}
+                  onFormat={async()=>{
+                    if (!selected || formatting) return
+                    setFormatting(true)
+                    try {
+                      if (wordsDirty) await api.patchCaptions(selected.id,{words})
+                      setWords(await api.readability(selected.id));setWordsDirty(true)
+                    } catch(err){setError(err as Error)} finally{setFormatting(false)}
+                  }}
                   onSave={saveWords}
-                  saving={savingWords}
+                  saving={savingWords || formatting}
                   dirty={wordsDirty}
                 />
+                </fieldset>
 
                 <div>
-                  <p className="eyebrow border-b border-ink-800 pb-2">Caption style</p>
+                  <p className="eyebrow border-b border-ink-800 pb-2">Framing and captions</p>
+                  <label className="mt-4 block text-sm text-ink-200">Framing mode
+                    <select className="field mt-2" value={selected.render_options.framing} disabled={savingOptions || exporting.size>0} onChange={e=>saveOptions({...selected.render_options,framing:e.target.value as Clip['render_options']['framing']})}>
+                      <option value="auto">Automatic · safe face framing</option><option value="fit">Fit whole scene · preserve all subjects</option><option value="manual">Manual static portrait crop</option>
+                    </select>
+                  </label>
+                  {selected.render_options.framing==='manual' && <div className="mt-3 grid grid-cols-2 gap-4">
+                    {(['manual_x','manual_y'] as const).filter(key=>!cropPath || (key==='manual_x' ? cropPath.source_width > cropPath.segments[0].width : cropPath.source_height > cropPath.segments[0].height)).map(key=><label key={key} className="text-xs text-ink-300">{key==='manual_x'?'Horizontal position':'Vertical position'}
+                      <input type="range" min="0" max="1" step=".02" className="mt-3 w-full" defaultValue={selected.render_options[key]} key={`${selected.id}-${key}`} disabled={savingOptions || exporting.size>0} onPointerUp={e=>saveOptions({...selected.render_options,[key]:Number(e.currentTarget.value)})} onKeyUp={e=>{if(e.key.startsWith('Arrow'))void saveOptions({...selected.render_options,[key]:Number(e.currentTarget.value)})}} />
+                    </label>)}
+                    <p className="col-span-2 text-xs text-ink-400">Static crop has no tracking movement. Check the full face throughout the clip; use Fit if no portrait crop can contain it.</p>
+                  </div>}
+
+                  <div className="mt-4 grid grid-cols-2 gap-4">
+                    {([['size','Caption size',.6,1.4,.05],['max_width','Text width',.55,.9,.05],['bottom','Bottom safe area',.12,.3,.02],['subject_position','Subject position',.35,.65,.05],['face_margin','Face safe margin',.05,.25,.05]] as const).map(([key,label,min,max,step]) => <label key={key} className="text-xs text-ink-300">{label}
+                      <input className="field mt-2" type="number" min={min} max={max} step={step} defaultValue={selected.render_options[key]} key={`${selected.id}-${key}-${selected.render_options[key]}`}
+                        disabled={savingOptions || exporting.size>0 || ((key==='subject_position' || key==='face_margin') && selected.render_options.framing!=='auto')} onBlur={async(e) => {
+                          const value=Number(e.target.value); if (!Number.isFinite(value) || value<min || value>max) return
+                          setSavingOptions(true)
+                          try {patchClip(await api.renderOptions(selected.id,{...selected.render_options,[key]:value})); setCropPath(await api.getCropPath(selected.id))}
+                          catch(err){setError(err as Error)} finally{setSavingOptions(false)}
+                        }} />
+                    </label>)}
+                  </div>
                   <div className="mt-3 space-y-1">
                     {styles.map((style) => (
                       <button
                         key={style.key}
+                        disabled={savingOptions || exporting.size > 0}
                         onClick={() => setStyle(selected, style.key)}
                         className={[
                           'block w-full border-l-2 py-2 pl-3 text-left transition-colors duration-200',
@@ -269,7 +372,7 @@ export function Review() {
                             ? 'border-sodium-500 bg-ink-850/60'
                             : 'border-transparent hover:border-ink-700 hover:bg-ink-850/30',
                         ].join(' ')}
-                      >
+                            >
                         <span className="text-sm text-ink-100">{style.label}</span>
                         <span className="mt-0.5 block text-xs leading-snug text-ink-500">
                           {style.description}
@@ -285,6 +388,7 @@ export function Review() {
                     {RATIOS.map((ratio) => (
                       <button
                         key={ratio}
+                        disabled={savingOptions || exporting.size>0}
                         onClick={() => setRatio(selected, ratio)}
                         className={[
                           'numeric btn',
@@ -300,7 +404,7 @@ export function Review() {
                 <div className="border-t border-ink-800 pt-6">
                   <button
                     onClick={() => exportClip(selected)}
-                    disabled={exporting.has(selected.id)}
+                    disabled={exporting.has(selected.id) || savingOptions || savingWords || formatting}
                     className="btn btn-primary w-full"
                   >
                     {exporting.has(selected.id) ? 'Rendering…' : 'Export this clip'}
@@ -318,7 +422,7 @@ export function Review() {
                             download
                             className="truncate text-sodium-500 underline underline-offset-4"
                           >
-                            {record.ratio} · {record.style}
+                            {record.ratio} · {record.style}{record.stale ? ' · previous render' : ' · current'}
                           </a>
                           <span className="numeric shrink-0 text-ink-600">
                             {formatBytes(record.size_bytes)}

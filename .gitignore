@@ -45,6 +45,50 @@ Thumbs.db
 desktop.ini
 
 # Secrets — never commit
+.align-venv/
 .env
 .env.*
 !.env.example
+
+# Local validation records contain private job IDs, media references and paths.
+CLIPFORGE.md
+docs/PHASE*-REPORT.md
+frontend/docs/
+scripts/benchmark_*.py
+scripts/phase02*.py
+scripts/verify_phase02*.py
+scripts/compare_real_exports.py
+scripts/evaluate_alignment.py
+scripts/phase02_cache.py
+scripts/run_http_job.py
+scripts/resume_job.py
+scripts/verify_exports.py
+scripts/verify_http.py
+scripts/verify_cancellation.py
+scripts/check_ollama.py
+*.tsbuildinfo
+*.log
+*.tmp
+*.bak
+*.db-*
+*.sqlite*
+data/
+media/
+exports/
+work/
+models/
+*.bin
+*.safetensors
+*.task
+*.mp4
+*.mov
+*.webm
+*.wav
+*.mp3
+!docs/assets/demo.mp4
+
+# Ship portable runtime helpers, not machine-specific experiment runners.
+scripts/*
+!scripts/align_worker.py
+!scripts/bootstrap_models.py
+!scripts/windows-common.ps1

@@ -73,6 +73,8 @@ class ReframeConfig:
     smoothing: SmoothingConfig | None = None
     #: Skip face detection entirely and centre-crop everything.
     centre_only: bool = False
+    subject_position: float = 0.5
+    face_margin: float = 0.12
 
 
 def build_crop_path(
@@ -101,6 +103,23 @@ def build_crop_path(
     source_w, source_h = info.width, info.height
     crop_w, crop_h = target_crop_size(source_w, source_h, config.aspect_w, config.aspect_h)
 
+    def safe_fallback():
+        return CropPath(
+            source_width=source_w,
+            source_height=source_h,
+            segments=[
+                CropSegment(
+                    start_s=0,
+                    end_s=duration,
+                    width=source_w,
+                    height=source_h,
+                    keyframes=[CropKeyframe(0, 0, 0)],
+                    strategy=Strategy.GENERAL,
+                    fit=True,
+                )
+            ],
+        )
+
     if config.centre_only:
         return centre_crop(
             source_w, source_h, duration, aspect_w=config.aspect_w, aspect_h=config.aspect_h
@@ -110,27 +129,13 @@ def build_crop_path(
         observations = sample_faces(
             video, start_s=start_s, end_s=end_s, sample_fps=config.sample_fps
         )
-    except FaceDetectionUnavailable as exc:
-        log.warning("Face detection unavailable (%s); using a centre crop.", exc)
-        return centre_crop(
-            source_w,
-            source_h,
-            duration,
-            aspect_w=config.aspect_w,
-            aspect_h=config.aspect_h,
-            zoom=GENERAL_ZOOM,
-        )
+    except (FaceDetectionUnavailable, RuntimeError, OSError, ValueError) as exc:
+        log.warning("Face detection unavailable (%s); fitting the full frame.", exc)
+        return safe_fallback()
 
     if not observations:
-        log.info("No faces detected in %s; using a centre crop.", video.name)
-        return centre_crop(
-            source_w,
-            source_h,
-            duration,
-            aspect_w=config.aspect_w,
-            aspect_h=config.aspect_h,
-            zoom=GENERAL_ZOOM,
-        )
+        log.info("No faces detected in %s; fitting the full frame.", video.name)
+        return safe_fallback()
 
     tracks = build_tracks(observations)
     shots = detect_shots(video, start_s=start_s, end_s=end_s)
@@ -218,6 +223,21 @@ def _segments_for_shot(
         visible = [
             t for t in tracks if t.observations_between(assignment.start_s, assignment.end_s)
         ]
+        # Without diarization, mouth jitter is not reliable speaker evidence.
+        # Preserve all people rather than silently crop the actual speaker out.
+        if len(visible) > 1 and not turns:
+            segments.append(
+                _wide_segment(
+                    visible,
+                    start_s=assignment.start_s,
+                    end_s=assignment.end_s,
+                    source_w=source_w,
+                    source_h=source_h,
+                    crop_w=crop_w,
+                    crop_h=crop_h,
+                )
+            )
+            continue
 
         if assignment.track is not None:
             segments.append(
@@ -282,23 +302,32 @@ def _track_segment(
             crop_h=crop_h,
         )
 
+    margin = crop_w * config.face_margin
+    if any(o.width + 2 * margin > crop_w or o.height > crop_h * 0.65 for o in observations):
+        return CropSegment(
+            start_s=start_s,
+            end_s=end_s,
+            width=source_w,
+            height=source_h,
+            keyframes=[CropKeyframe(start_s, 0, 0)],
+            strategy=Strategy.TRACK,
+            fit=True,
+        )
+
     raw = [
         (
             o.t,
-            _clamp(o.cx - crop_w / 2, 0, source_w - crop_w),
+            _clamp(o.cx - crop_w * config.subject_position, 0, source_w - crop_w),
             _clamp(o.eye_y - EYE_LINE_RATIO * crop_h, 0, source_h - crop_h),
         )
         for o in observations
     ]
 
-    mean_face_width = sum(o.width for o in observations) / len(observations)
+    sum(o.width for o in observations) / len(observations)
     spread_x = max(x for _, x, _ in raw) - min(x for _, x, _ in raw)
 
     # A close-up, or a subject who barely moves, is better locked than tracked.
-    should_lock = (
-        mean_face_width > crop_w * LOCK_IF_FACE_WIDER_THAN
-        or spread_x < (config.smoothing or SmoothingConfig()).dead_zone_px
-    )
+    should_lock = spread_x < (config.smoothing or SmoothingConfig()).dead_zone_px
 
     if should_lock or len(raw) < 3:
         x = sum(item[1] for item in raw) / len(raw)
@@ -314,6 +343,50 @@ def _track_segment(
             keyframes.insert(0, CropKeyframe(start_s, keyframes[0].x, keyframes[0].y))
         if keyframes[-1].t < end_s:
             keyframes.append(CropKeyframe(end_s, keyframes[-1].x, keyframes[-1].y))
+
+    # Project the smoothed path into intervals that contain the whole face.
+    # If keeping a face would require a whip pan, fit the shot instead.
+    for frame in keyframes:
+        observation = min(observations, key=lambda o: abs(o.t - frame.t))
+        if (
+            observation.bottom - frame.y > crop_h * 0.70
+            or observation.top - frame.y < crop_h * 0.04
+        ):
+            return CropSegment(
+                start_s=start_s,
+                end_s=end_s,
+                width=source_w,
+                height=source_h,
+                keyframes=[CropKeyframe(start_s, 0, 0)],
+                strategy=Strategy.TRACK,
+                fit=True,
+            )
+        low = max(0, observation.right + margin - crop_w)
+        high = min(source_w - crop_w, observation.left - margin)
+        if low > high:
+            return CropSegment(
+                start_s=start_s,
+                end_s=end_s,
+                width=source_w,
+                height=source_h,
+                keyframes=[CropKeyframe(start_s, 0, 0)],
+                strategy=Strategy.TRACK,
+                fit=True,
+            )
+        frame.x = _clamp(frame.x, low, high)
+    for a, b in zip(keyframes, keyframes[1:], strict=False):
+        if abs(b.x - a.x) > (config.smoothing or SmoothingConfig()).max_velocity_px_s * max(
+            0.001, b.t - a.t
+        ):
+            return CropSegment(
+                start_s=start_s,
+                end_s=end_s,
+                width=source_w,
+                height=source_h,
+                keyframes=[CropKeyframe(start_s, 0, 0)],
+                strategy=Strategy.TRACK,
+                fit=True,
+            )
 
     return CropSegment(
         start_s=start_s,

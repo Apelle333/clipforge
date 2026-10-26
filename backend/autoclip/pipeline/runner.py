@@ -115,7 +115,9 @@ class PipelineRunner:
     ) -> None:
         self.job = job
         self.source = source
-        self.settings = settings or load_settings()
+        self.settings = settings or (
+            Settings.model_validate(job.settings) if job.settings else load_settings()
+        )
         self.on_progress = on_progress
         self._is_cancelled = is_cancelled or (lambda: False)
         self.workspace = JobWorkspace(job.id)
@@ -169,6 +171,21 @@ class PipelineRunner:
     # -- entry point -------------------------------------------------------
 
     async def run(self) -> list[Clip]:
+        from filelock import FileLock, Timeout
+
+        lock = FileLock(self.workspace.root / "pipeline.lock")
+        try:
+            lock.acquire(timeout=0)
+        except Timeout as exc:
+            raise PipelineError(
+                "This job is already being processed by another local process.", stage=Stage.PREPARE
+            ) from exc
+        try:
+            return await self._run_locked()
+        finally:
+            lock.release()
+
+    async def _run_locked(self) -> list[Clip]:
         """Run the full pipeline and return the exported clips."""
         store.update_job(self.job.id, status="running", started_at=utcnow(), error=None)
 
@@ -184,6 +201,11 @@ class PipelineRunner:
             store.update_job(self.job.id, status="cancelled", finished_at=utcnow(), progress=0.0)
             raise
         except Exception as exc:
+            if self._is_cancelled():
+                store.update_job(
+                    self.job.id, status="cancelled", finished_at=utcnow(), progress=0.0
+                )
+                raise JobCancelled("Job cancelled.") from exc
             log.exception("Job %s failed.", self.job.id)
             store.update_job(self.job.id, status="failed", error=str(exc), finished_at=utcnow())
             raise
@@ -221,7 +243,9 @@ class PipelineRunner:
 
         if self.workspace.transcript.exists():
             log.info("Reusing existing transcript for job %s.", self.job.id)
-            transcript = Transcript.load(self.workspace.transcript)
+            from .corrections import load_transcript
+
+            transcript = load_transcript(self.job.id)
             self._finish_stage(stage)
             return transcript
 
@@ -333,6 +357,12 @@ class PipelineRunner:
                 )
                 crop_paths[clip.id].save(cached)
 
+            from .editor_options import EditorOptions, crop_cache_key
+
+            cache_key = crop_cache_key(clip, self.settings.export.ratio, EditorOptions())
+            keyed = cached.with_name(f"{clip.id}-{cache_key}.json")
+            crop_paths[clip.id].save(keyed)
+
             self._emit(stage, (index + 1) / len(clips), f"Reframing clip {index + 1}")
 
         self._finish_stage(stage)
@@ -356,7 +386,11 @@ class PipelineRunner:
         stage = Stage.EXPORT
         self._check_cancelled()
 
-        style = captions.get_style(self.settings.export.caption_style)
+        from .editor_options import EditorOptions
+
+        style = captions.configured_style(
+            captions.get_style(self.settings.export.caption_style), EditorOptions()
+        )
         ratio = self.settings.export.ratio
         source_path = Path(self.source.path)
         destination_dir = paths.exports_dir() / self.job.id

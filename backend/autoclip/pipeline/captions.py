@@ -26,7 +26,7 @@ FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 #: Words are grouped into caption events; more than this is hard to read at a
 #: glance on a phone.
-DEFAULT_MAX_WORDS = 4
+DEFAULT_MAX_WORDS = 3
 #: A pause longer than this ends a caption group regardless of word count.
 DEFAULT_MAX_GAP_S = 0.4
 
@@ -93,6 +93,7 @@ class CaptionStyle:
     boxed: bool = False
     box_colour: str = "#000000"
     box_alpha: int = 40
+    max_width_ratio: float = 0.82
 
     @property
     def font_path(self) -> Path:
@@ -106,14 +107,14 @@ PRESETS: dict[str, CaptionStyle] = {
         description="Chunky white with a heavy outline; the spoken word grows and turns yellow.",
         font="Anton",
         font_file="Anton-Regular.ttf",
-        size_ratio=0.062,
+        size_ratio=0.040,
         primary="#FFFFFF",
         accent="#FFE500",
         outline_width=5.0,
         all_caps=True,
         animation="scale",
         scale_percent=118,
-        max_words=4,
+        max_words=3,
     ),
     "karaoke_fill": CaptionStyle(
         key="karaoke_fill",
@@ -121,13 +122,13 @@ PRESETS: dict[str, CaptionStyle] = {
         description="Words fill with colour exactly as they're spoken.",
         font="Anton",
         font_file="Anton-Regular.ttf",
-        size_ratio=0.058,
+        size_ratio=0.038,
         primary="#FFFFFF",
         accent="#31E981",
         outline_width=4.0,
         all_caps=True,
         animation="karaoke",
-        max_words=5,
+        max_words=3,
     ),
     "clean_lower": CaptionStyle(
         key="clean_lower",
@@ -144,7 +145,7 @@ PRESETS: dict[str, CaptionStyle] = {
         all_caps=False,
         margin_v_ratio=0.10,
         animation="none",
-        max_words=8,
+        max_words=5,
     ),
     "boxed": CaptionStyle(
         key="boxed",
@@ -152,14 +153,14 @@ PRESETS: dict[str, CaptionStyle] = {
         description="High-contrast text on a solid block. Readable on any footage.",
         font="Anton",
         font_file="Anton-Regular.ttf",
-        size_ratio=0.052,
+        size_ratio=0.036,
         primary="#FFFFFF",
         accent="#FF4D4D",
         outline_width=0.0,
         all_caps=True,
         animation="scale",
         scale_percent=112,
-        max_words=4,
+        max_words=3,
         boxed=True,
         box_colour="#000000",
         box_alpha=30,
@@ -195,7 +196,16 @@ class CaptionGroup:
 
     @property
     def text(self) -> str:
-        return " ".join(w.text.strip() for w in self.words)
+        return join_rendered([w.text.strip() for w in self.words], self.words)
+
+
+def join_rendered(parts: list[str], words: list[Word]) -> str:
+    result = ""
+    for index, (part, word) in enumerate(zip(parts, words, strict=True)):
+        attach = word.text.startswith(("'", "’", ",", ".", "!", "?", ";", ":"))
+        previous = index > 0 and words[index - 1].text.endswith(("'", "’"))
+        result += ("" if index == 0 or attach or previous else " ") + part
+    return result
 
 
 def group_words(
@@ -203,6 +213,7 @@ def group_words(
     *,
     max_words: int = DEFAULT_MAX_WORDS,
     max_gap_s: float = DEFAULT_MAX_GAP_S,
+    max_chars: int = 32,
 ) -> list[CaptionGroup]:
     """Split words into caption-sized groups.
 
@@ -217,7 +228,11 @@ def group_words(
     for index, word in enumerate(words):
         if current:
             gap = word.start - current[-1].end
-            if gap > max_gap_s or len(current) >= max_words:
+            if (
+                gap > max_gap_s
+                or (len(current) >= max_words and not word.text.startswith(("'", "’")))
+                or len(" ".join(w.text for w in current)) + len(word.text) + 1 > max_chars
+            ):
                 groups.append(CaptionGroup(words=current))
                 current = []
 
@@ -264,25 +279,31 @@ def build_ass(
     subs.info["WrapStyle"] = "0"
 
     scale = height / REFERENCE_HEIGHT
-    subs.styles[STYLE_NAME] = _build_ass_style(style, height=height, scale=scale)
+    subs.styles[STYLE_NAME] = _build_ass_style(style, height=height, scale=scale, width=width)
 
     groups = group_words(words, max_words=style.max_words)
 
     for group in groups:
+        first_event = len(subs.events)
         if style.animation == "karaoke":
             subs.events.append(_karaoke_event(group, style, time_offset_s))
         elif style.animation == "scale" and style.accent:
             subs.events.extend(_per_word_events(group, style, time_offset_s))
         else:
             subs.events.append(_static_event(group, style, time_offset_s))
+        size = fitted_font_size(group, style, width, height)
+        for event in subs.events[first_event:]:
+            event.text = f"{{\\fs{size}}}" + event.text.replace("{\\r}", f"{{\\r\\fs{size}}}")
 
     return subs
 
 
-def _build_ass_style(style: CaptionStyle, *, height: int, scale: float) -> pysubs2.SSAStyle:
+def _build_ass_style(
+    style: CaptionStyle, *, height: int, scale: float, width: int = 1080
+) -> pysubs2.SSAStyle:
     ass_style = pysubs2.SSAStyle()
     ass_style.fontname = style.font
-    ass_style.fontsize = round(height * style.size_ratio)
+    ass_style.fontsize = round(min(height * style.size_ratio, width * 0.075))
     ass_style.primarycolor = hex_to_ass(style.primary)
     ass_style.secondarycolor = hex_to_ass(style.accent or style.primary)
     ass_style.outlinecolor = hex_to_ass(style.outline)
@@ -294,12 +315,35 @@ def _build_ass_style(style: CaptionStyle, *, height: int, scale: float) -> pysub
     ass_style.borderstyle = 3 if style.boxed else 1
     ass_style.alignment = pysubs2.Alignment.BOTTOM_CENTER
     ass_style.marginv = round(height * style.margin_v_ratio)
-    ass_style.marginl = ass_style.marginr = round(height * 0.03)
+    ass_style.marginl = ass_style.marginr = round(width * (1 - style.max_width_ratio) / 2)
     return ass_style
+
+
+def fitted_font_size(group: CaptionGroup, style: CaptionStyle, width: int, height: int) -> int:
+    from PIL import ImageFont
+
+    size = max(12, round(min(height * style.size_ratio, width * 0.075)))
+    font = ImageFont.truetype(str(style.font_path), size)
+    text = group.text.upper() if style.all_caps else group.text
+    measured = font.getlength(text) * max(1, style.scale_percent / 100) + 2 * style.outline_width
+    return max(12, int(size * min(1, width * style.max_width_ratio / max(1, measured))))
+
+
+def configured_style(style: CaptionStyle, options) -> CaptionStyle:
+    from dataclasses import replace
+
+    return replace(
+        style,
+        size_ratio=style.size_ratio * options.size,
+        max_width_ratio=options.max_width,
+        margin_v_ratio=options.bottom,
+    )
 
 
 def _text_of(word: Word, style: CaptionStyle) -> str:
     text = word.text.strip()
+    # Render user text as text, never as an ASS override/drawing command.
+    text = text.replace("\\", "＼").replace("{", "｛").replace("}", "｝")
     return text.upper() if style.all_caps else text
 
 
@@ -313,7 +357,7 @@ def _event(start_s: float, end_s: float, text: str, offset: float) -> pysubs2.SS
 
 
 def _static_event(group: CaptionGroup, style: CaptionStyle, offset: float) -> pysubs2.SSAEvent:
-    text = " ".join(_text_of(w, style) for w in group.words)
+    text = join_rendered([_text_of(w, style) for w in group.words], group.words)
     return _event(group.start, group.end, text, offset)
 
 
@@ -334,7 +378,7 @@ def _karaoke_event(group: CaptionGroup, style: CaptionStyle, offset: float) -> p
                 duration_cs += round(gap * 100)
         parts.append(f"{{\\kf{duration_cs}}}{_text_of(word, style)}")
 
-    return _event(group.start, group.end, " ".join(parts), offset)
+    return _event(group.start, group.end, join_rendered(parts, group.words), offset)
 
 
 def _per_word_events(
@@ -362,7 +406,9 @@ def _per_word_events(
         # out early when a word's measured end precedes the next word's start.
         end = word.end if active + 1 < len(group.words) else group.end
         next_start = group.words[active + 1].start if active + 1 < len(group.words) else end
-        events.append(_event(word.start, max(end, next_start), " ".join(rendered), offset))
+        events.append(
+            _event(word.start, max(end, next_start), join_rendered(rendered, group.words), offset)
+        )
 
     return events
 

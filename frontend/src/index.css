@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+@font-face { font-family: 'Anton'; src: url('../../backend/autoclip/assets/fonts/Anton-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: 'Inter'; src: url('../../backend/autoclip/assets/fonts/Inter-Variable.ttf') format('truetype'); font-display: swap; }
+
 /* --------------------------------------------------------------------------
    AutoClip — darkroom edit-suite
 

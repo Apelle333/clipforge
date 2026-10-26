@@ -19,10 +19,10 @@ export function App() {
   return (
     <div className="min-h-screen bg-ink-900">
       <header className="border-b border-ink-800">
-        <div className="mx-auto flex max-w-[1600px] items-baseline gap-8 px-6 py-4 lg:px-10">
+        <div className="mx-auto flex max-w-[2200px] items-baseline gap-8 px-6 py-4 lg:px-10">
           <NavLink to="/" className="group flex items-baseline gap-2.5">
             <span className="font-display text-2xl leading-none text-ink-100">
-              Auto<span className="italic text-sodium-500">Clip</span>
+              CLIP<span className="text-sodium-500">FORGE</span>
             </span>
           </NavLink>
 
@@ -39,7 +39,7 @@ export function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1600px] px-6 pb-24 lg:px-10">
+      <main className="mx-auto max-w-[2200px] px-6 pb-24 lg:px-10">
         <Outlet />
       </main>
     </div>
@@ -90,9 +90,9 @@ function SystemBadge({ system }: { system: SystemStatus }) {
       </span>
       <span
         className={system.ready ? 'text-ink-400' : 'text-signal-bad'}
-        title={system.ready ? 'All required components present' : 'Run autoclip doctor'}
+        title={system.ready ? 'Runtime libraries present. Model readiness is shown below.' : 'Run autoclip doctor'}
       >
-        {system.ready ? 'ready' : 'not ready'}
+        {system.ready ? 'runtime ready' : 'runtime incomplete'}
       </span>
     </div>
   )

@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# Preserve upstream font license texts verbatim, including their whitespace.
+**/*-OFL.txt -whitespace
+
 *.png binary
 *.jpg binary
 *.mp4 binary

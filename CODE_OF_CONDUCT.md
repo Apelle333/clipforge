@@ -22,7 +22,7 @@ reasonable person not want to contribute.
 ## Enforcement
 
 Report problems privately to the maintainer through
-[GitHub](https://github.com/artbyjazi). Reports are handled confidentially.
+[GitHub](https://github.com/Apelle333). Reports are handled confidentially.
 
 Responses scale with severity: usually a private word, sometimes removed comments,
 occasionally a ban. Maintainers who don't follow this themselves should expect the

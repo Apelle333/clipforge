@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 
 import { formatTimecode, type Word } from '../api'
 
@@ -15,12 +15,14 @@ export function CaptionEditor({
   onSave,
   saving,
   dirty,
+  onFormat,
 }: {
   words: Word[]
   onChange: (words: Word[]) => void
   onSave: () => void
   saving: boolean
   dirty: boolean
+  onFormat: () => void
 }) {
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
@@ -54,8 +56,9 @@ export function CaptionEditor({
       {/* Words flow as text, not as a list of rows — reading it back is the
           main way you notice a mistranscription. */}
       <div className="mt-4 max-h-[38vh] overflow-y-auto pr-1 text-[0.9375rem] leading-[1.9]">
-        {words.map((word, index) =>
-          editing === index ? (
+        {words.map((word, index) => <Fragment key={index}>
+          {index > 0 && (word.start - words[index-1].end >= 1.2 || (index % 55 === 0 && /[.!?]$/.test(words[index-1].text))) && <span className="block h-4" />}
+          {editing === index ? (
             <input
               key={index}
               autoFocus
@@ -90,11 +93,13 @@ export function CaptionEditor({
             >
               {word.text}
             </button>
-          ),
-        )}
+          )}
+        </Fragment>)}
       </div>
 
-      <div className="mt-4 flex items-center gap-4">
+      <p className="mt-3 text-xs text-ink-400">Punctuation suggestions preserve words and times; review against audio before saving.</p>
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <button onClick={onFormat} disabled={saving} className="btn btn-quiet">Suggest punctuation</button>
         <button onClick={onSave} disabled={!dirty || saving} className="btn btn-ghost">
           {saving ? 'Saving…' : 'Save edits'}
         </button>

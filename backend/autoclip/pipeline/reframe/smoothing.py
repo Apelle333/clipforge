@@ -73,7 +73,8 @@ class OneEuroFilter:
             return self._value(sample, 1.0)
 
         dt = timestamp - self._last_time
-        derivative = (sample - (self._last_sample or sample)) / dt
+        previous = self._last_sample if self._last_sample is not None else sample
+        derivative = (sample - previous) / dt
         smoothed_derivative = self._derivative(derivative, _alpha(self.derivative_cutoff, dt))
 
         cutoff = self.min_cutoff + self.beta * abs(smoothed_derivative)

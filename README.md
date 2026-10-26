@@ -17,6 +17,22 @@ The community marketplace is planned; it does not exist in this release.
 [Installation troubleshooting](docs/INSTALLATION.md) ·
 [Deployment](docs/DEPLOYMENT.md) · [Validation and audit](docs/RELEASE-AUDIT.md)
 
+## For a technical portfolio review
+
+This is an independent adaptation of AutoClip; upstream attribution and license
+information are retained in [NOTICE](NOTICE) and [LICENSE](LICENSE).
+
+- [Typed frontend API client](frontend/src/api.ts): request/response contracts
+  between the editor and Python backend.
+- [FastAPI routes](backend/autoclip/api/): jobs, sources, clips and settings.
+- [Ollama HTTP provider](backend/autoclip/providers/ollama_provider.py): local
+  model calls, structured-output contracts, timeout and error handling.
+- [API tests](tests/test_api.py) and
+  [release-security scenarios](tests/test_release_security.py).
+
+The screenshots and demo below are labelled synthetic fixtures. This is a
+Windows-first alpha, not a customer deployment or a production service.
+
 ## What works
 
 - Local MP4/MOV/WebM and other supported media; optional rights-permitted YouTube ingest.

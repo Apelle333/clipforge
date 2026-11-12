@@ -240,3 +240,35 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Glass surfaces — retain the dark slate and sodium accent used by the editor. */
+header {
+  background: rgba(20, 25, 33, 0.78);
+  border-bottom-color: rgba(219, 229, 240, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2), inset 0 -1px rgba(255, 255, 255, 0.035);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+[class*="rounded"][class*="bg-ink-800"], [class*="rounded"][class*="bg-ink-700"], [class*="border-ink-800"][class*="bg-ink"] {
+  background-color: rgba(42, 49, 61, 0.62);
+  border-color: rgba(214, 229, 244, 0.14);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.18), inset 0 1px rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  backdrop-filter: blur(18px) saturate(135%);
+}
+.field {
+  background-color: rgba(24, 30, 39, 0.68);
+  border-color: rgba(214, 229, 244, 0.17);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.btn-ghost {
+  background-color: rgba(255, 255, 255, 0.035);
+  border-color: rgba(214, 229, 244, 0.16);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+@supports not ((backdrop-filter: blur(1px))) {
+  [class*="rounded"][class*="bg-ink-800"], [class*="rounded"][class*="bg-ink-700"] { background-color: #252c36; }
+}
